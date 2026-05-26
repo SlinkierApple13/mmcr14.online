@@ -1,0 +1,9 @@
+.vscode
+uploads
+
+*.md
+*.tex
+
+data
+scripts
+ssl
