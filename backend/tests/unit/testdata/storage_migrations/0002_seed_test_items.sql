@@ -1,0 +1,1 @@
+INSERT INTO test_items(id, value) VALUES ('item-1', 'seeded');

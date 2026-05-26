@@ -1,0 +1,114 @@
+.replay-list-page {
+  min-height: 100dvh;
+  background: #ffffff;
+}
+
+.replay-list-header {
+  background: #fafafa;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 0 20px;
+}
+
+.replay-list-header-bar {
+  max-width: 1200px;
+  height: 100%;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.replay-list-title {
+  margin: 0 !important;
+}
+
+.replay-list-content {
+  padding: 24px 18px 32px;
+}
+
+.replay-list-shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.replay-list-hero,
+.replay-list-filters,
+.replay-list-results,
+.replay-list-stats .ant-card {
+  border-radius: 16px;
+  border-color: rgba(122, 93, 60, 0.12);
+  box-shadow: 0 12px 30px rgba(72, 49, 24, 0.08);
+}
+
+.replay-list-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.replay-list-loading {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.replay-list-item {
+  padding: 18px 0 !important;
+}
+
+.replay-list-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.replay-list-session-id {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 15px;
+}
+
+.replay-list-player-row {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.replay-list-pagination {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .replay-list-header {
+    padding: 0 12px;
+  }
+
+  .replay-list-content {
+    padding: 16px 12px 24px;
+  }
+
+  .replay-list-item-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .replay-list-item-head .ant-btn {
+    width: 100%;
+  }
+
+  .replay-list-switch-row {
+    justify-content: flex-start;
+  }
+}
