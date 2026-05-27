@@ -210,7 +210,7 @@ struct Seat {
     }
 
     auto leave() {
-        afk_counter = std::max(afk_counter, std::max(0, GameConfig::afk_timeout_times - 1));
+        afk_counter = std::max(afk_counter, std::max(0, GameConfig::afk_timeout_times));
         disconnected = true;
     }
 
