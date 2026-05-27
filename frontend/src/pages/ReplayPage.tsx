@@ -121,6 +121,7 @@ export default function ReplayPage() {
 
   const wallSeeds = activeRoundRecord?.round_start_snapshot.wall_seeds ?? []
   const wallSeedCopyText = wallSeeds.map((seed) => normalizeReplaySeedFragment(seed)).join('')
+  const recordVersion = activeRoundRecord?.version ?? 0
   const replayRatings = (activeRoundRecord as unknown as Record<string, unknown> | null)?.ratings as Array<{ player_id: number; username?: string; mu?: number; tau?: number; sigma?: number; points?: number; level?: number }> | undefined
   const finalReplayRatings = (activeRoundRecord as unknown as Record<string, unknown> | null)?.final_ratings as Array<{ player_id: number; username?: string; mu?: number; tau?: number; sigma?: number; points?: number; level?: number }> | undefined
 
@@ -567,7 +568,7 @@ export default function ReplayPage() {
             <div className="replay-section">
               {/* <h3>记录信息</h3>
               <p>玩家：{(sessionPayload?.player_names ?? []).filter((name) => name.trim().length > 0).join(' / ') || '无'}</p> */}
-              <button onClick={() => { void navigator.clipboard?.writeText(wallSeedCopyText) }} disabled={wallSeedCopyText.length === 0}>复制牌山种子</button>
+              <button onClick={() => { void navigator.clipboard?.writeText(wallSeedCopyText) }} disabled={wallSeedCopyText.length === 0 || recordVersion < 3}>复制牌山种子</button>
             </div>
 
             <div className="replay-control-grid">

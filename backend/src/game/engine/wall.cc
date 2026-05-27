@@ -57,14 +57,14 @@ auto Wall::draw_back() -> util::StatusOr<mahjong::tile_t> {
     if (empty()) {
         return util::Status::InvalidArgument("No tiles left in the wall");
     }
-    if (tiles_[back_stack_index_ * 2 + 1] != mahjong::tile::invalid) {
-        mahjong::tile_t tile = tiles_[back_stack_index_ * 2 + 1];
-        tiles_[back_stack_index_ * 2 + 1] = mahjong::tile::invalid;
+    if (tiles_[back_stack_index_ * 2] != mahjong::tile::invalid) {
+        mahjong::tile_t tile = tiles_[back_stack_index_ * 2];
+        tiles_[back_stack_index_ * 2] = mahjong::tile::invalid;
         --size_;
         return tile;
     }
-    mahjong::tile_t tile = tiles_[back_stack_index_ * 2];
-    tiles_[back_stack_index_ * 2] = mahjong::tile::invalid;
+    mahjong::tile_t tile = tiles_[back_stack_index_ * 2 + 1];
+    tiles_[back_stack_index_ * 2 + 1] = mahjong::tile::invalid;
     back_stack_index_ = (back_stack_index_ + 67) % 68;
     --size_;
     return tile;
