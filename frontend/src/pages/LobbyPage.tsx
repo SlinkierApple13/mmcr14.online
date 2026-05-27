@@ -308,6 +308,7 @@ function LobbyPage() {
   const [games, setGames] = useState<ActiveSessionSummary[]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
+  const pingIntervalRef = useRef<number | null>(null)
   const [form] = Form.useForm<AuthFormValues>()
   const [createQueueForm] = Form.useForm<CreateQueueValues>()
 
@@ -389,6 +390,13 @@ function LobbyPage() {
       }
     }
 
+    const clearPingInterval = () => {
+      if (pingIntervalRef.current !== null) {
+        window.clearInterval(pingIntervalRef.current)
+        pingIntervalRef.current = null
+      }
+    }
+
     const scheduleReconnect = () => {
       if (cancelled || reconnectTimeoutRef.current !== null) {
         return
@@ -410,12 +418,20 @@ function LobbyPage() {
         wsRef.current.close()
       }
 
+      clearPingInterval()
+
       const socket = new WebSocket(buildWebSocketUrl('/ws/lobby', token))
       wsRef.current = socket
 
       socket.onopen = () => {
         clearReconnectTimer()
         socket.send(JSON.stringify({ type: 'lobby.list' }))
+        clearPingInterval()
+        pingIntervalRef.current = window.setInterval(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'ping' }))
+          }
+        }, 15_000)
       }
 
       socket.onmessage = (event) => {
@@ -432,6 +448,7 @@ function LobbyPage() {
       }
 
       socket.onclose = () => {
+        clearPingInterval()
         if (wsRef.current === socket) {
           wsRef.current = null
         }
@@ -444,6 +461,7 @@ function LobbyPage() {
     return () => {
       cancelled = true
       clearReconnectTimer()
+      clearPingInterval()
       wsRef.current?.close(1000, 'Lobby page cleanup')
       wsRef.current = null
     }
