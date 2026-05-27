@@ -24,7 +24,6 @@ import {
   ArrowLeftOutlined,
   BarChartOutlined,
   FilterOutlined,
-  PlayCircleOutlined,
   SearchOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons'
@@ -394,7 +393,7 @@ export default function StatsPage() {
       render: (t: string) => t || 'N/A' },
     { title: '操作', key: 'action', width: 80,
       render: (_: unknown, r: RoundEntryRecord) => (
-        <Button type="primary" size="small" icon={<PlayCircleOutlined />}
+        <Button type="link" size="small"
           onClick={() => window.open(`/replay?session=${encodeURIComponent(r.replayFolder)}&round=${r.roundIndex}`, '_blank')}>
           回放
         </Button>
@@ -616,7 +615,7 @@ export default function StatsPage() {
               ]}
               rowKey="fan_name"
               size="small"
-              pagination={{ pageSize: 25, showSizeChanger: true, pageSizeOptions: ['10', '25', '50'] }}
+              pagination={false}
             />
           </Card>
         ) : null}

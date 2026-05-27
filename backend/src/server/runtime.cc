@@ -52,6 +52,8 @@ constexpr std::string_view kDefaultDatabasePath = "mmcr_backend.sqlite3";
 constexpr std::string_view kDefaultDebugLogDir = "network-logs";
 constexpr std::string_view kDefaultCorsAllowHeaders = "Authorization, Content-Type";
 constexpr std::string_view kDefaultCorsAllowMethods = "GET, POST, OPTIONS";
+constexpr double kLargeHandCutoff = 18.495;
+constexpr std::size_t kBigWinsMaxCount = 10;
 
 auto ResolveWorkerThreadCount(std::size_t configured_thread_count) -> std::size_t {
 	if (configured_thread_count != 0) {
@@ -3776,6 +3778,46 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
 				players_array.append(std::move(player_json));
 			}
 			payload["players"] = std::move(players_array);
+			callback(NewJsonResponse(std::move(payload)));
+		},
+		{drogon::Get});
+
+	drogon::app().registerHandler(
+		"/api/v1/stats/big_wins",
+		[state](const drogon::HttpRequestPtr&,
+				std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
+			stats::StatsFilter filter;
+			filter.min_fan = kLargeHandCutoff;
+			auto result = state->stats().ListRounds(filter, "time", "desc", 0, kBigWinsMaxCount);
+			if (!result.ok()) {
+				callback(NewStatusErrorResponse(result.status()));
+				return;
+			}
+
+			Json::Value payload(Json::objectValue);
+			Json::Value big_wins(Json::arrayValue);
+			for (const auto* round_entry : result.value().rounds) {
+				Json::Value entry(Json::objectValue);
+				entry["winner"] = std::string(round_entry->winner_username());
+				entry["fan"] = round_entry->fan;
+				entry["time"] = Json::Int64(round_entry->timestamp_ms);
+				entry["game_folder"] = round_entry->round_key.session_identifier;
+				entry["game_index"] = static_cast<int>(round_entry->round_key.round_number);
+				entry["winner_seat"] = round_entry->winner_seat;
+
+				if (!round_entry->fan_names.empty()) {
+					std::string fans_str;
+					for (std::size_t j = 0; j < round_entry->fan_names.size(); ++j) {
+						if (j > 0) {
+							fans_str += ", ";
+						}
+						fans_str += round_entry->fan_names[j];
+					}
+					entry["fans_str"] = std::move(fans_str);
+				}
+				big_wins.append(std::move(entry));
+			}
+			payload["big_wins"] = std::move(big_wins);
 			callback(NewJsonResponse(std::move(payload)));
 		},
 		{drogon::Get});
