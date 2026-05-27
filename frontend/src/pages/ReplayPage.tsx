@@ -100,6 +100,8 @@ export default function ReplayPage() {
   const playbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const currentIndexRef = useRef(0)
+  const watchingSeatRef = useRef(watchingSeat)
+  const revealAllHandsRef = useRef(!hideOtherHands)
 
   const roundRecords = sessionPayload?.round_records ?? []
   const roundCount = sessionPayload?.round_count ?? Math.max(roundRecords.length, 1)
@@ -162,6 +164,11 @@ export default function ReplayPage() {
     setWatchingSeat(initialWatchingSeat)
   }, [sessionIdentifier])
 
+  useEffect(() => {
+    watchingSeatRef.current = watchingSeat
+    revealAllHandsRef.current = revealAllHands
+  }, [watchingSeat, revealAllHands])
+
   function flushIndex(index: number) {
     const entry = timeline[index]
     if (!entry) {
@@ -170,7 +177,7 @@ export default function ReplayPage() {
     currentIndexRef.current = index
     setCurrentIndex(index)
     sceneRef.current?.flushFromSnapshot(
-      materializeReplaySnapshot(entry, watchingSeat, revealAllHands),
+      materializeReplaySnapshot(entry, watchingSeatRef.current, revealAllHandsRef.current),
     )
     sceneRef.current?.applyReplayCue(entry.category, entry.event as Record<string, any> | null)
   }
@@ -190,7 +197,7 @@ export default function ReplayPage() {
     }
 
     sceneRef.current.flushFromSnapshot(
-      materializeReplaySnapshot(entry, watchingSeat, revealAllHands),
+      materializeReplaySnapshot(entry, watchingSeatRef.current, revealAllHandsRef.current),
     )
     sceneRef.current.applyReplayCue(entry.category, entry.event as Record<string, any> | null)
   }
@@ -205,7 +212,7 @@ export default function ReplayPage() {
     currentIndexRef.current = boundedIndex
     setCurrentIndex(boundedIndex)
 
-    const payload = materializeReplayPayload(entry, watchingSeat, revealAllHands)
+    const payload = materializeReplayPayload(entry, watchingSeatRef.current, revealAllHandsRef.current)
     if (!payload || !sceneRef.current) {
       flushIndex(boundedIndex)
       return
@@ -405,29 +412,54 @@ export default function ReplayPage() {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       switch (e.key) {
-        case 'ArrowLeft': stopPlayback(); applyIndex(currentIndexRef.current - 1); break
-        case 'ArrowRight': stopPlayback(); applyIndex(currentIndexRef.current + 1); break
-        case 'Home': case '[': stopPlayback(); applyIndex(firstPlayableIndex); break
-        case 'End': case ']': stopPlayback(); applyIndex(finalTransitionIndex); break
+        case 'ArrowLeft':
+          if (!canMoveBackward) break
+          stopPlayback(); applyIndex(currentIndexRef.current - 1); break
+        case 'ArrowRight':
+          if (!canMoveForward) break
+          stopPlayback(); applyIndex(currentIndexRef.current + 1); break
+        case 'Home': case '[':
+          if (timeline.length === 0) break
+          stopPlayback(); applyIndex(firstPlayableIndex); break
+        case 'End': case ']':
+          if (timeline.length === 0) break
+          stopPlayback(); applyIndex(finalTransitionIndex); break
         case 'Enter': stopPlayback(); setHideOtherHands(v => !v); break
-        case ' ': e.preventDefault(); setPlaying(v => !v); break
+        case ' ':
+          if (!canMoveForward && !playing) break
+          e.preventDefault(); setPlaying(v => !v); break
         case '-': stopPlayback(); setWatchingSeat(s => (s + 3) % 4); break
         case '+': case '=': stopPlayback(); setWatchingSeat(s => (s + 1) % 4); break
-        case 'p': case 'ArrowUp': stopPlayback(); if (selectedRoundNumber > 1) setRequestedRoundNumber(selectedRoundNumber - 1); break
-         case '\\': case 'ArrowDown': stopPlayback(); if (selectedRoundNumber < roundCount) setRequestedRoundNumber(selectedRoundNumber + 1); break
+        case 'p': case 'ArrowUp':
+          if (selectedRoundNumber <= 1) break
+          stopPlayback(); setRequestedRoundNumber(selectedRoundNumber - 1); break
+         case '\\': case 'ArrowDown':
+          if (selectedRoundNumber >= roundCount) break
+          stopPlayback(); setRequestedRoundNumber(selectedRoundNumber + 1); break
       }
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [canMoveBackward, canMoveForward, selectedRoundNumber, roundCount, firstPlayableIndex, finalTransitionIndex, timeline, hideOtherHands, watchingSeat])
+  }, [canMoveBackward, canMoveForward, selectedRoundNumber, roundCount, firstPlayableIndex, finalTransitionIndex, timeline, hideOtherHands, watchingSeat, playing])
 
   // ── Wheel → advance/retreat 1 event in replay ────────────────────
   useEffect(() => {
     const handler = (e: WheelEvent) => {
       if (!sceneReady || timeline.length === 0) return
+      const steppingForward = e.deltaY > 0
+      const steppingBackward = e.deltaY < 0
+      if (!steppingForward && !steppingBackward) {
+        return
+      }
       e.preventDefault()
+      if (steppingForward && currentIndexRef.current >= timeline.length - 1) {
+        return
+      }
+      if (steppingBackward && currentIndexRef.current <= 0) {
+        return
+      }
       stopPlayback()
-      if (e.deltaY > 0) applyIndex(currentIndexRef.current + 1)
+      if (steppingForward) applyIndex(currentIndexRef.current + 1)
       else applyIndex(currentIndexRef.current - 1)
     }
     document.addEventListener('wheel', handler, { passive: false })

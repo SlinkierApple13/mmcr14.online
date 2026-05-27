@@ -49,8 +49,7 @@ constexpr std::string_view kDefaultBindAddress = "0.0.0.0";
 constexpr std::uint16_t kDefaultPort = 8080;
 constexpr std::size_t kDefaultThreadCount = 0;
 constexpr std::string_view kDefaultDatabasePath = "mmcr_backend.sqlite3";
-constexpr std::string_view kDefaultDebugLogPath = "mmcr_backend_debug.jsonl";
-constexpr std::string_view kDefaultCorsAllowOrigin = "*";
+constexpr std::string_view kDefaultDebugLogDir = "network-logs";
 constexpr std::string_view kDefaultCorsAllowHeaders = "Authorization, Content-Type";
 constexpr std::string_view kDefaultCorsAllowMethods = "GET, POST, OPTIONS";
 
@@ -216,46 +215,70 @@ auto SanitizeQueryString(std::string_view raw_query) -> std::string {
 
 class DebugTrafficLogger {
 public:
-	[[nodiscard]] auto Initialize(const std::filesystem::path& path) -> util::Status {
-		path_ = path;
-		const auto parent = path.parent_path();
-		if (!parent.empty()) {
+	[[nodiscard]] auto Initialize(const std::filesystem::path& dir) -> util::Status {
+		dir_ = dir;
+		if (!dir_.empty()) {
 			std::error_code error_code;
-			std::filesystem::create_directories(parent, error_code);
+			std::filesystem::create_directories(dir_, error_code);
 			if (error_code) {
 				return util::Status::Internal(
 					"failed to create debug log directory: " + error_code.message());
 			}
 		}
-
-		stream_.open(path_, std::ios::out | std::ios::app);
-		if (!stream_.is_open()) {
-			return util::Status::Internal(
-				"failed to open debug log file: " + path_.string());
-		}
-
-		return util::Status::Ok();
+		return RotateFile();
 	}
 
 	void Log(Json::Value entry) {
+		std::lock_guard lock(mutex_);
+		if (!stream_.is_open() || TodayUtcDate() != current_log_date_) {
+			if (auto status = RotateFile(); !status.ok()) {
+				return;
+			}
+		}
 		if (!stream_.is_open()) {
 			return;
 		}
 
 		entry["timestamp_ms"] = Json::Int64(CurrentUnixTimeMs());
 		const auto line = JsonToCompactString(entry);
-
-		std::lock_guard lock(mutex_);
 		stream_ << line << '\n';
 		stream_.flush();
 	}
 
-	[[nodiscard]] auto path() const -> const std::filesystem::path& {
-		return path_;
+	[[nodiscard]] auto dir() const -> const std::filesystem::path& {
+		return dir_;
 	}
 
 private:
-	std::filesystem::path path_;
+	static auto TodayUtcDate() -> std::string {
+		const auto now = std::chrono::system_clock::now();
+		const auto time_t_now = std::chrono::system_clock::to_time_t(now);
+		std::tm utc{};
+		gmtime_r(&time_t_now, &utc);
+		std::ostringstream oss;
+		oss << std::put_time(&utc, "%Y-%m-%d");
+		return oss.str();
+	}
+
+	[[nodiscard]] auto RotateFile() -> util::Status {
+		if (stream_.is_open()) {
+			stream_.close();
+		}
+		if (dir_.empty()) {
+			return util::Status::Ok();
+		}
+		current_log_date_ = TodayUtcDate();
+		const auto file_path = dir_ / (current_log_date_ + ".jsonl");
+		stream_.open(file_path, std::ios::out | std::ios::app);
+		if (!stream_.is_open()) {
+			return util::Status::Internal(
+				"failed to open debug log file: " + file_path.string());
+		}
+		return util::Status::Ok();
+	}
+
+	std::filesystem::path dir_;
+	std::string current_log_date_;
 	std::mutex mutex_;
 	std::ofstream stream_;
 };
@@ -348,7 +371,7 @@ auto ParseInt64String(std::string_view raw_value,
 	return parsed_value;
 }
 
-auto ResolveCorsAllowOrigin() -> std::string {
+auto ResolveCorsAllowOrigin() -> std::optional<std::string> {
 	if (const char* raw_value = std::getenv("MMCR_BACKEND_CORS_ALLOW_ORIGIN");
 		raw_value != nullptr) {
 		const std::string_view trimmed = TrimString(raw_value);
@@ -357,13 +380,16 @@ auto ResolveCorsAllowOrigin() -> std::string {
 		}
 	}
 
-	return std::string(kDefaultCorsAllowOrigin);
+	return std::nullopt;
 }
 
 void ApplyCorsHeaders(const drogon::HttpResponsePtr& response) {
 	const auto allow_origin = ResolveCorsAllowOrigin();
-	response->addHeader("Access-Control-Allow-Origin", allow_origin);
-	if (allow_origin != "*") {
+	if (!allow_origin.has_value()) {
+		return;
+	}
+	response->addHeader("Access-Control-Allow-Origin", *allow_origin);
+	if (*allow_origin != "*") {
 		response->addHeader("Access-Control-Allow-Credentials", "true");
 	}
 	response->addHeader("Access-Control-Allow-Headers", std::string(kDefaultCorsAllowHeaders));
@@ -1066,50 +1092,50 @@ auto SerializePendingSnapshot(const game::PendingSession& session,
 	return payload;
 }
 
-auto EventKindName(game::EventKind kind) -> std::string_view {
-	switch (kind) {
-		case game::EventKind::kNone:
-			return "none";
-		case game::EventKind::kStart:
-			return "start";
-		case game::EventKind::kPredraw:
-			return "predraw";
-		case game::EventKind::kDrawTile:
-			return "draw_tile";
-		case game::EventKind::kDiscardTile:
-			return "discard_tile";
-		case game::EventKind::kChow:
-			return "chow";
-		case game::EventKind::kPung:
-			return "pung";
-		case game::EventKind::kMeldedKong:
-			return "melded_kong";
-		case game::EventKind::kAddedKong:
-			return "added_kong";
-		case game::EventKind::kConcealedKong:
-			return "concealed_kong";
-		case game::EventKind::kDiscardWin:
-			return "discard_win";
-		case game::EventKind::kRobAddedKongWin:
-			return "rob_added_kong_win";
-		case game::EventKind::kSelfDrawnWin:
-			return "self_drawn_win";
-		case game::EventKind::kPass:
-			return "pass";
-		case game::EventKind::kFinalPass:
-			return "final_pass";
-		case game::EventKind::kDrawnGame:
-			return "drawn_game";
-		case game::EventKind::kEnd:
-			return "end";
-		case game::EventKind::kPlayerLeft:
-			return "player_left";
-		case game::EventKind::kPlayerResumed:
-			return "player_resumed";
-	}
+// auto EventKindName(game::EventKind kind) -> std::string_view {
+// 	switch (kind) {
+// 		case game::EventKind::kNone:
+// 			return "none";
+// 		case game::EventKind::kStart:
+// 			return "start";
+// 		case game::EventKind::kPredraw:
+// 			return "predraw";
+// 		case game::EventKind::kDrawTile:
+// 			return "draw_tile";
+// 		case game::EventKind::kDiscardTile:
+// 			return "discard_tile";
+// 		case game::EventKind::kChow:
+// 			return "chow";
+// 		case game::EventKind::kPung:
+// 			return "pung";
+// 		case game::EventKind::kMeldedKong:
+// 			return "melded_kong";
+// 		case game::EventKind::kAddedKong:
+// 			return "added_kong";
+// 		case game::EventKind::kConcealedKong:
+// 			return "concealed_kong";
+// 		case game::EventKind::kDiscardWin:
+// 			return "discard_win";
+// 		case game::EventKind::kRobAddedKongWin:
+// 			return "rob_added_kong_win";
+// 		case game::EventKind::kSelfDrawnWin:
+// 			return "self_drawn_win";
+// 		case game::EventKind::kPass:
+// 			return "pass";
+// 		case game::EventKind::kFinalPass:
+// 			return "final_pass";
+// 		case game::EventKind::kDrawnGame:
+// 			return "drawn_game";
+// 		case game::EventKind::kEnd:
+// 			return "end";
+// 		case game::EventKind::kPlayerLeft:
+// 			return "player_left";
+// 		case game::EventKind::kPlayerResumed:
+// 			return "player_resumed";
+// 	}
 
-	return "unknown";
-}
+// 	return "unknown";
+// }
 
 auto PendingSessionContainsPlayer(const game::PendingSession& session, std::int64_t player_id) -> bool {
 	return std::any_of(session.seats().begin(), session.seats().end(), [player_id](const game::PendingSeat& seat) {
@@ -1443,8 +1469,7 @@ auto SerializeStatsRoundEntries(const std::vector<const stats::RoundEntry*>& rou
 				std::string_view sort_field,
 				std::string_view sort_order,
 				std::size_t offset,
-				std::size_t limit,
-				bool exclude_superior_fans) -> std::string {
+				std::size_t limit) -> std::string {
 	std::vector<const stats::RoundEntry*> sorted = rounds;
 
 	bool desc = (sort_order != "asc");
@@ -2006,11 +2031,11 @@ public:
 			return status;
 		}
 
-		if (config_.debug_log_path.empty()) {
+		if (config_.debug_log_dir.empty()) {
 			return util::Status::Ok();
 		}
 
-		return traffic_logger_.Initialize(config_.debug_log_path);
+		return traffic_logger_.Initialize(config_.debug_log_dir);
 	}
 
 	[[nodiscard]] auto Register(const auth::RegisterRequest& request)
@@ -2925,7 +2950,6 @@ public:
 			}
 
 			std::vector<const stats::RoundEntry*> cached_rounds;
-			bool exclude_superior_fans = false;
 			{
 				std::lock_guard lock(ws_mutex_);
 				auto it = ws_sessions_.find(connection.get());
@@ -2936,11 +2960,10 @@ public:
 					return;
 				}
 				cached_rounds = it->second.cached_rounds;
-				exclude_superior_fans = it->second.exclude_superior_fans;
 			}
 
 			auto result = SerializeStatsRoundEntries(cached_rounds, sort_field,
-				sort_order, offset, limit, exclude_superior_fans);
+				sort_order, offset, limit);
 			connection->send(std::move(result));
 			return;
 		}
@@ -4053,7 +4076,7 @@ util::StatusOr<RuntimeConfig> LoadRuntimeConfigFromEnv() {
 	config.port = kDefaultPort;
 	config.thread_count = kDefaultThreadCount;
 	config.database_path = std::filesystem::path(kDefaultDatabasePath);
-	config.debug_log_path = std::filesystem::path(kDefaultDebugLogPath);
+	config.debug_log_dir = std::filesystem::path(kDefaultDebugLogDir);
 
 	if (const char* raw_bind_address = std::getenv("MMCR_BACKEND_BIND_ADDRESS");
 		raw_bind_address != nullptr && raw_bind_address[0] != '\0') {
@@ -4090,9 +4113,9 @@ util::StatusOr<RuntimeConfig> LoadRuntimeConfigFromEnv() {
 		config.database_path = std::filesystem::path(raw_database_path);
 	}
 
-	if (const char* raw_debug_log_path = std::getenv("MMCR_BACKEND_DEBUG_LOG_PATH");
-		raw_debug_log_path != nullptr && raw_debug_log_path[0] != '\0') {
-		config.debug_log_path = std::filesystem::path(raw_debug_log_path);
+	if (const char* raw_debug_log_dir = std::getenv("MMCR_BACKEND_DEBUG_LOG_DIR");
+		raw_debug_log_dir != nullptr && raw_debug_log_dir[0] != '\0') {
+		config.debug_log_dir = std::filesystem::path(raw_debug_log_dir);
 	}
 
 	if (const char* raw_records_path = std::getenv("MMCR_RECORDS_DIR");

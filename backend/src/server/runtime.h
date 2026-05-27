@@ -14,7 +14,7 @@ struct RuntimeConfig {
     std::uint16_t port{8080};
     std::size_t thread_count{0};
     std::filesystem::path database_path{"mmcr_backend.sqlite3"};
-    std::filesystem::path debug_log_path;
+    std::filesystem::path debug_log_dir;
     std::filesystem::path records_path;
     std::filesystem::path imported_records_path;
     std::filesystem::path ssl_cert_path;

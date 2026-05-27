@@ -505,18 +505,6 @@ auto ReadOptionalUInt64(const Json::Value& object, std::string_view name)
 	return std::nullopt;
 }
 
-auto ReadOptionalInt64(const Json::Value& object, std::string_view name)
-	-> std::optional<std::int64_t> {
-	const Json::Value& value = object[std::string(name)];
-	if (value.isInt64()) {
-		return value.asInt64();
-	}
-	if (value.isInt()) {
-		return static_cast<std::int64_t>(value.asInt());
-	}
-	return std::nullopt;
-}
-
 auto ReadOptionalTile(const Json::Value& object, std::string_view name)
 	-> std::optional<mahjong::tile_t> {
 	auto value = ReadOptionalUInt64(object, name);
