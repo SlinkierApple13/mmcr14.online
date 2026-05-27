@@ -44,6 +44,32 @@
   position: relative;
 }
 
+.game-page__ratings-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.game-page__ratings-area:not(.is-expanded) {
+  display: none;
+}
+
+.game-page__sidebar-bottom-row {
+  display: flex;
+  gap: 6px;
+  position: sticky;
+  bottom: 0;
+  background: inherit;
+  padding-top: 4px;
+  z-index: 20;
+  margin-top: auto;
+}
+
+.game-page__sidebar-bottom-row .scene-appearance-toggle__button {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 @media (max-width: 900px) {
   .game-page__layout {
     flex-direction: column;
@@ -62,10 +88,19 @@
     width: 100%;
     min-width: unset;
     flex: 0 0 auto;
+    gap: 6px;
+    overflow: hidden;
+  }
+  .game-page__ratings-area {
+    display: flex;
+  }
+  .game-page__ratings-area:not(.is-expanded) {
+    display: none;
+  }
+  .game-page__ratings-area.is-expanded {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
-    overflow: hidden;
   }
   .game-page__sidebar-card {
     min-width: 0;

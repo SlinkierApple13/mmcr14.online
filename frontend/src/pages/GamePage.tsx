@@ -64,6 +64,9 @@ export default function GamePage() {
   const [showNotif, setShowNotif] = useState(false)
   const [sceneReady, setSceneReady] = useState(false)
   const [appearancePanelOpen, setAppearancePanelOpen] = useState(false)
+  const [ratingsExpanded, setRatingsExpanded] = useState(
+    () => window.matchMedia('(min-width: 901px)').matches,
+  )
   const [volume, setVolumeState] = useState(() => loadStoredVolume())
   const {
     appearance: sceneAppearance,
@@ -143,6 +146,12 @@ export default function GamePage() {
   useEffect(() => {
     sceneRef.current?.setBackgroundImage(backgroundImage?.dataUrl ?? null)
   }, [backgroundImage?.dataUrl])
+
+  // ── Force PixiJS resize when ratings expand/collapse ──────────
+  useEffect(() => {
+    const timer = setTimeout(() => sceneRef.current?.forceResize(), 100)
+    return () => clearTimeout(timer)
+  }, [ratingsExpanded])
 
   // ── WebSocket ─────────────────────────────────────────────────
   useEffect(() => {
@@ -470,47 +479,35 @@ export default function GamePage() {
           </div>
         </section>
         <aside className="game-page__sidebar">
-          {sidebarCards.length > 0 && sidebarCards.map((r) => (
-            <div className="game-page__sidebar-card" key={r.player_id}>
-              <div className="player-name">
-                {r.username || (r.player_id > 0 ? `#${r.player_id}` : 'N/A')}
+          <div className={`game-page__ratings-area${ratingsExpanded ? ' is-expanded' : ''}`}>
+            {sidebarCards.length > 0 && sidebarCards.map((r) => (
+              <div className="game-page__sidebar-card" key={r.player_id}>
+                <div className="player-name">
+                  {r.username || (r.player_id > 0 ? `#${r.player_id}` : 'N/A')}
+                </div>
+                {r.points !== undefined && (
+                  <div className="player-rating">
+                    {rankToChinese(r.level ?? 0)} · {r.points.toFixed(2)}pts
+                  </div>
+                )}
+                {r.mu !== undefined && (
+                  <div className="player-rating">
+                    R {r.mu.toFixed(2)}±{r.tau?.toFixed(2)} · σ {r.sigma?.toFixed(2)}
+                  </div>
+                )}
               </div>
-              {r.points !== undefined && (
-                <div className="player-rating">
-                  {rankToChinese(r.level ?? 0)} · {r.points.toFixed(2)}pts
-                </div>
-              )}
-              {r.mu !== undefined && (
-                <div className="player-rating">
-                  R {r.mu.toFixed(2)}±{r.tau?.toFixed(2)} · σ {r.sigma?.toFixed(2)}
-                </div>
-              )}
-            </div>
-          ))}
-          <div className={`scene-appearance-toggle${appearancePanelOpen ? ' is-open' : ''}`}>
-            {appearancePanelOpen && (
-              <div className="scene-appearance-toggle__panel">
-                <div className="scene-appearance-toggle__card">
-                  <SceneAppearancePanel
-                    title="场景外观"
-                    appearance={sceneAppearance}
-                    backgroundImageName={backgroundImage?.name ?? null}
-                    backgroundImageLoading={backgroundImageLoading}
-                    volume={volume}
-                    onVolumeChange={(v) => { setVolumeState(v); saveStoredVolume(v); sceneRef.current?.setVolume(v) }}
-                    onBackgroundColorTableChange={setBackgroundColorTable}
-                    onBackgroundColorOutsideChange={setBackgroundColorOutside}
-                    onBackgroundImageEnabledChange={setBackgroundImageEnabled}
-                    onBackgroundImageAlphaChange={setBackgroundImageAlpha}
-                    onBackgroundImageSelected={uploadBackgroundImage}
-                    onBackgroundImageCleared={clearBackgroundImage}
-                    onTileCoverColorChange={setTileCoverColor}
-                    onAddTileCoverColor={addTileCoverColor}
-                    onRemoveTileCoverColor={removeTileCoverColor}
-                    onReset={resetAppearance}
-                  />
-                </div>
-              </div>
+            ))}
+          </div>
+          <div className="game-page__sidebar-bottom-row">
+            {sidebarCards.length > 0 && (
+              <button
+                type="button"
+                className="scene-appearance-toggle__button"
+                aria-expanded={ratingsExpanded}
+                onClick={() => setRatingsExpanded((v) => !v)}
+              >
+                {'玩家信息'}
+              </button>
             )}
             <button
               type="button"
@@ -518,9 +515,33 @@ export default function GamePage() {
               aria-expanded={appearancePanelOpen}
               onClick={() => setAppearancePanelOpen((value) => !value)}
             >
-              外观设置
+              设置
             </button>
           </div>
+          {appearancePanelOpen && (
+            <div className="scene-appearance-toggle__panel">
+              <div className="scene-appearance-toggle__card">
+                <SceneAppearancePanel
+                  title="设置"
+                  appearance={sceneAppearance}
+                  backgroundImageName={backgroundImage?.name ?? null}
+                  backgroundImageLoading={backgroundImageLoading}
+                  volume={volume}
+                  onVolumeChange={(v) => { setVolumeState(v); saveStoredVolume(v); sceneRef.current?.setVolume(v) }}
+                  onBackgroundColorTableChange={setBackgroundColorTable}
+                  onBackgroundColorOutsideChange={setBackgroundColorOutside}
+                  onBackgroundImageEnabledChange={setBackgroundImageEnabled}
+                  onBackgroundImageAlphaChange={setBackgroundImageAlpha}
+                  onBackgroundImageSelected={uploadBackgroundImage}
+                  onBackgroundImageCleared={clearBackgroundImage}
+                  onTileCoverColorChange={setTileCoverColor}
+                  onAddTileCoverColor={addTileCoverColor}
+                  onRemoveTileCoverColor={removeTileCoverColor}
+                  onReset={resetAppearance}
+                />
+              </div>
+            </div>
+          )}
         </aside>
       </div>
     </div>
