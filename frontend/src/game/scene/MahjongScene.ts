@@ -3,7 +3,7 @@ import { isMobile } from 'pixi.js'
 import {
   SCALE_FACTOR, WINDOW_SCALE, TILE_HEIGHT, TILE_WIDTH,
   TILE_RADIUS, LINE_WIDTH, BORDER_COLOR, MELD_OPT_SCALE,
-  FRONT_COLOR,
+  FRONT_COLOR, IS_MOBILE_ANY,
 } from './constants'
 import {
   DEFAULT_SCENE_APPEARANCE,
@@ -1121,7 +1121,7 @@ export class MahjongScene {
 
       this.names[localDir] = displayPlayerName(seat.username)
       this.scores[localDir] = seat.score
-      this.present[localDir] = !(seat.afk || seat.disconnected)
+      this.present[localDir] = this.presentationMode === 'replay' ? true : !(seat.afk || seat.disconnected)
 
       // River tiles
       for (const tid of seat.discard_pile) {
@@ -1447,7 +1447,7 @@ export class MahjongScene {
           break
         }
         case 'end': {
-          for (const r of this.rivers) r.unwait()
+          // for (const r of this.rivers) r.unwait()
           this.countdown.stop()
           this.clearMeldChoices()
           this.hands[0].unwaitDiscard()
@@ -1483,7 +1483,7 @@ export class MahjongScene {
       const dir = transDir(ss.seat_index as number, this.selfDir)
       this.names[dir] = displayPlayerName(ss.username)
       this.scores[dir] = ss.score as number ?? 0
-      this.present[dir] = !((ss.afk as boolean) || Boolean(ss.disconnected))
+      this.present[dir] = this.presentationMode === 'replay' ? true : !((ss.afk as boolean) || Boolean(ss.disconnected))
       this.stateDisplay.setScore(this.names[dir], this.scores[dir], dir, !this.present[dir])
     }
     // Current direction comes directly from backend state.
@@ -1538,12 +1538,14 @@ export class MahjongScene {
   }
 
   handlePlayerLeft(seat: number): void {
+    if (this.presentationMode === 'replay') return
     const dir = transDir(seat, this.selfDir)
     this.present[dir] = false
     this.stateDisplay.setPresent(dir, false)
   }
 
   handlePlayerResumed(seat: number): void {
+    if (this.presentationMode === 'replay') return
     const dir = transDir(seat, this.selfDir)
     this.present[dir] = true
     this.stateDisplay.setPresent(dir, true)
@@ -1709,23 +1711,27 @@ export class MahjongScene {
     bg.stroke({ color: BORDER_COLOR, width: LINE_WIDTH })
     btn.addChild(bg)
 
+    const textScale = IS_MOBILE_ANY ? 4 : 1
+
     if (twoRows) {
       const t1 = new Text({
-        text: `${oldRank} > ${newRank}`,
-        style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 160, fill: 0x000000, align: 'center' },
+        text: `${oldRank} → ${newRank}`,
+        style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 160 / textScale, fill: 0x000000, align: 'center' },
       })
       t1.anchor.set(0.5, 0.5)
+      t1.scale.set(textScale)
       t1.x = 0
       t1.y = -100
       btn.addChild(t1)
     }
 
-    const line2 = `等级分 ${deltaMu >= 0 ? '+' : '\u2212'}${Math.abs(deltaMu).toFixed(2)} 积分 ${deltaPoints >= 0 ? '+' : '\u2212'}${Math.abs(deltaPoints).toFixed(2)}`
+    const line2 = `积分 ${deltaPoints >= 0 ? '+' : '\u2212'}${Math.abs(deltaPoints).toFixed(2)} (等级分 ${deltaMu >= 0 ? '+' : '\u2212'}${Math.abs(deltaMu).toFixed(2)})`
     const t2 = new Text({
       text: line2,
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: twoRows ? 110 : 140, fill: twoRows ? 0x333333 : 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: (twoRows ? 110 : 140) / textScale, fill: twoRows ? 0x333333 : 0x000000, align: 'center' },
     })
     t2.anchor.set(0.5)
+    t2.scale.set(textScale)
     t2.x = 0
     t2.y = twoRows ? 100 : 0
     btn.addChild(t2)
@@ -1852,6 +1858,11 @@ export class MahjongScene {
 
   setVolume(volume: number): void {
     this.globalVolume = volume
+  }
+
+  /** Trigger a renderer resize (e.g. after the sidebar height changes). */
+  forceResize(): void {
+    this.scheduleResizeAndLayout()
   }
 
   handleLatencyPong(identifier: number | null | undefined): void {
