@@ -32,6 +32,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons'
 import { ApiError, apiRequest, buildWebSocketUrl } from '../lib/backend'
+import { encodeWatchingSeat } from '../lib/replay'
 import { rankToChinese } from '../lib/chinese'
 import {
   clearStoredAuth,
@@ -77,17 +78,16 @@ interface AuthFormValues {
   password: string
 }
 
-// interface BigWinRow {
-//   key: string
-//   winner: string
-//   fan: number
-//   fans_str: string
-//   time: number | string
-//   game_folder?: string
-//   game_index?: number
-//   winner_seat?: number
-//   winner_direction?: number
-// }
+interface BigWinRow {
+  key: string
+  winner: string
+  fan: number
+  fans_str: string
+  time: number
+  game_folder: string
+  game_index: number
+  winner_seat: number
+}
 
 function describeError(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
@@ -313,6 +313,8 @@ function LobbyPage() {
   const [createQueueForm] = Form.useForm<CreateQueueValues>()
 
   const [rating, setRating] = useState<{ mu: number; tau: number; sigma: number; points: number; level: number } | null>(null)
+  const [bigWins, setBigWins] = useState<BigWinRow[]>([])
+  const [fetchingBigWins, setFetchingBigWins] = useState(false)
 
   const token = auth?.session.token ?? null
   const loggedIn = auth !== null
@@ -324,6 +326,21 @@ function LobbyPage() {
     },
     [],
   )
+
+  const fetchBigWins = useCallback(() => {
+    setFetchingBigWins(true)
+    apiRequest<{ big_wins: BigWinRow[] }>('/stats/big_wins')
+      .then((resp) => {
+        setBigWins(
+          (resp.big_wins ?? []).map((item, index) => ({
+            ...item,
+            key: `${item.game_folder}_${item.game_index}_${index}`,
+          })),
+        )
+      })
+      .catch(() => {})
+      .finally(() => setFetchingBigWins(false))
+  }, [])
 
   const fetchLobby = useCallback(
     async (authToken: string | null = token) => {
@@ -466,6 +483,10 @@ function LobbyPage() {
       wsRef.current = null
     }
   }, [applyLobbyPayload, token])
+
+  useEffect(() => {
+    fetchBigWins()
+  }, [fetchBigWins])
 
   const handleSubmit = async (values: AuthFormValues) => {
     setLoading(true)
@@ -840,6 +861,46 @@ function LobbyPage() {
             <Col xs={24} lg={24} xl={24}>
               <Card
                 title={
+                  <Space>
+                    <span>最近大和</span>
+                    {fetchingBigWins && <LoadingOutlined style={{ marginLeft: 8 }} />}
+                  </Space>
+                }
+                style={{ height: '100%', borderRadius: '12px', borderColor: 'rgba(0, 0, 0, 0.06)', boxShadow: '0 14px 32px rgba(0, 0, 0, 0.06)' }}
+                bodyStyle={{ padding: '0px' }}
+              >
+                <Table<BigWinRow>
+                  columns={[
+                    { title: '和家', dataIndex: 'winner', key: 'winner', width: 80, ellipsis: true },
+                    { title: '番数', dataIndex: 'fan', key: 'fan', width: 60,
+                      render: (fan: number) => fan.toFixed(2) },
+                    { title: '番种', dataIndex: 'fans_str', key: 'fans_str', width: 200, ellipsis: true,
+                      render: (str: string) => str || 'N/A' },
+                    { title: '时间', dataIndex: 'time', key: 'time', width: 150,
+                      render: (t: number) => {
+                        const d = new Date(t)
+                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                      } },
+                    { title: '', key: 'action', width: 80,
+                      render: (_: unknown, r: BigWinRow) => (
+                        <Button type="link" size="small"
+                          onClick={() => window.open(`/replay?session=${encodeURIComponent(r.game_folder)}&round=${r.game_index}&perspective=${encodeWatchingSeat(r.winner_seat)}`, '_blank')}>
+                          回放
+                        </Button>
+                      )},
+                  ]}
+                  dataSource={bigWins}
+                  rowKey="key"
+                  pagination={false}
+                  loading={fetchingBigWins}
+                  locale={{ emptyText: '暂无大和记录' }}
+                  size="small"
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={24} xl={24}>
+              <Card
+                title={
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Space>
                       <span>等待中</span>
@@ -896,6 +957,7 @@ function LobbyPage() {
                 />
               </Card>
             </Col>
+
           </Row>
         )}
       </Content>
