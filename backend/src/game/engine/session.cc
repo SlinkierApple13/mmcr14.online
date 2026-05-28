@@ -605,7 +605,7 @@ void ActiveSession::enqueue_current_round_record() {
 	}
 
 	Json::Value payload(Json::objectValue);
-	payload["version"] = 4;
+	payload["version"] = 5;
 
 	Json::Value header(Json::objectValue);
 	header["session_identifier"] = session_identifier_;
@@ -1406,12 +1406,14 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 	}
 
 	if (afk_status_broadcast.has_value()) {
-		broadcast_claim(Event{
+		Event event{
 			.kind = *afk_status_broadcast,
 			.actor_seat = event.actor_seat,
 			.timestamp_ms = now,
 			.stage_counter = event.stage_counter,
-		});
+		};
+		event_queue_.push_back(event);
+		broadcast_claim(event);
 	}
 
 	return util::Status::Ok();
@@ -1622,12 +1624,14 @@ void ActiveSession::execute_transition() {
 	if (transition.forced.value_or(false)) {
 		++seats_[transition.actor_seat].afk_counter;
 		if (!was_afk && seats_[transition.actor_seat].is_afk()) {
-			broadcast_claim(Event{
+			Event event{
 				.kind = EventKind::kPlayerLeft,
 				.actor_seat = transition.actor_seat,
 				.timestamp_ms = transition.timestamp_ms,
 				.stage_counter = state_.stage_counter,
-			});
+			};
+			event_queue_.push_back(event);
+			broadcast_claim(event);
 		}
 	}
 
