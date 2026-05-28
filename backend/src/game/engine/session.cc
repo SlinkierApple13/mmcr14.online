@@ -605,7 +605,7 @@ void ActiveSession::enqueue_current_round_record() {
 	}
 
 	Json::Value payload(Json::objectValue);
-	payload["version"] = 5;
+	payload["version"] = 6;
 
 	Json::Value header(Json::objectValue);
 	header["session_identifier"] = session_identifier_;
@@ -1279,9 +1279,10 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 	std::optional<EventKind> afk_status_broadcast;
 	if (event.kind != EventKind::kPlayerLeft && event.kind != EventKind::kPlayerResumed) {
 		const bool was_afk = seats_[event.actor_seat].is_afk();
+		const bool was_disconnected = seats_[event.actor_seat].disconnected;
 		seats_[event.actor_seat].afk_counter = 0;
 		seats_[event.actor_seat].disconnected = false;
-		if (was_afk && !seats_[event.actor_seat].is_afk()) {
+		if ((was_afk || was_disconnected) && !seats_[event.actor_seat].is_afk()) {
 			afk_status_broadcast = EventKind::kPlayerResumed;
 		}
 	}
