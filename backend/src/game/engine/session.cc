@@ -605,7 +605,7 @@ void ActiveSession::enqueue_current_round_record() {
 	}
 
 	Json::Value payload(Json::objectValue);
-	payload["version"] = 3;
+	payload["version"] = 4;
 
 	Json::Value header(Json::objectValue);
 	header["session_identifier"] = session_identifier_;
@@ -743,6 +743,7 @@ auto ActiveSession::player_leaves(std::int64_t player_id) -> util::Status {
 	Event event;
 	event.kind = EventKind::kPlayerLeft;
 	event.actor_seat = *seat_index;
+	event.timestamp_ms = now_ms();
 	return handle_event(event);
 }
 
@@ -755,6 +756,7 @@ auto ActiveSession::player_resumes(std::int64_t player_id) -> util::Status {
 	Event event;
 	event.kind = EventKind::kPlayerResumed;
 	event.actor_seat = *seat_index;
+	event.timestamp_ms = now_ms();
 	return handle_event(event);
 }
 

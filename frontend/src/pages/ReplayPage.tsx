@@ -122,6 +122,11 @@ export default function ReplayPage() {
   const wallSeeds = activeRoundRecord?.round_start_snapshot.wall_seeds ?? []
   const wallSeedCopyText = wallSeeds.map((seed) => normalizeReplaySeedFragment(seed)).join('')
   const recordVersion = activeRoundRecord?.version ?? 0
+
+  useEffect(() => {
+    sceneRef.current?.setReplayRecordVersion(recordVersion)
+  }, [recordVersion])
+
   const replayRatings = (activeRoundRecord as unknown as Record<string, unknown> | null)?.ratings as Array<{ player_id: number; username?: string; mu?: number; tau?: number; sigma?: number; points?: number; level?: number }> | undefined
   const finalReplayRatings = (activeRoundRecord as unknown as Record<string, unknown> | null)?.final_ratings as Array<{ player_id: number; username?: string; mu?: number; tau?: number; sigma?: number; points?: number; level?: number }> | undefined
 
