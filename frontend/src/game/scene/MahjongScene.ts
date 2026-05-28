@@ -455,10 +455,10 @@ export class MahjongScene {
     })
   }
 
-  private requestPassAction(): void {
+  private requestPassAction(applyDebounce: boolean = true): void {
     const now = Date.now()
     if (this.currentStageCounter <= 0) return
-    if (now - this.lastPassAttemptAtMs < PASS_DEBOUNCE_MS) return
+    if (applyDebounce && now - this.lastPassAttemptAtMs < PASS_DEBOUNCE_MS) return
     this.lastPassAttemptAtMs = now
     this.pendingPassAckStageCounter = this.currentStageCounter
     this.sendGameInput({ kind: 'pass' })
@@ -499,7 +499,7 @@ export class MahjongScene {
       this.clearMeldChoices()
       this.hands[0].unwaitDiscard()
       this.waitDisplay.visible = false
-      this.requestPassAction()
+      this.requestPassAction(false)
       return true
     }
     this.clearAutoActionTimeout()
@@ -538,7 +538,7 @@ export class MahjongScene {
       return this.triggerAutoAction(claimWinAction)
     }
     if (this.noMeld && nonWinClaimAction && !claimWinAction) {
-      const denyAction = this.findAvailableAction(['pass', 'final_pass'])
+      const denyAction = this.findAvailableAction([/*'pass', */'final_pass'])
       if (denyAction) {
         return this.triggerAutoAction(denyAction)
       }
@@ -558,6 +558,7 @@ export class MahjongScene {
       this.countdown.stop()
       this.clearMeldChoices()
       this.hands[0].unwaitDiscard()
+      // discard after 400 + random(0, 1000) ms
       this.autoActionTimeout = setTimeout(() => {
         this.autoActionTimeout = null
         if (!this.hasAction('discard_tile') || !drawnTile || this.hands[0].drawnTile !== drawnTile) {
@@ -569,7 +570,7 @@ export class MahjongScene {
           tile: drawnTile.tid,
           use_drawn_tile: true,
         })
-      }, 500)
+      }, 400 + Math.floor(Math.random() * 1000))
       return true
     }
     return false

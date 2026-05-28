@@ -15,13 +15,13 @@ struct GameConfig {
     static constexpr int auxiliary_timer_max_ms{45000};
     static constexpr int round_count_min{1};
     static constexpr int round_count_max{32};
-    static constexpr int minimal_transition_ms{500};
+    static constexpr int minimal_transition_ms{400};
     static constexpr int network_delay_ms{100};
     static constexpr int meld_offset_ms{1450};
     static constexpr int meld_pause_ms{750};
-    static constexpr int random_pause_range{1000};
+    static constexpr int random_pause_range{1450};
     static constexpr int round_interval_ms{5000};
-    static constexpr double random_pause_prob{0.1};
+    static constexpr double random_pause_prob{0.11};
 
     int primary_timer_ms{7000};
     int secondary_timer_ms{4000};
