@@ -315,6 +315,12 @@ function mergeRecordEvents(roundRecord: ReplayRoundRecord): ReplayQueuedEvent[] 
     if (left.category !== right.category) {
       return left.category === 'claim' ? -1 : 1
     }
+    if (left.event.kind !== right.event.kind && left.event.kind === 'player_resumed') {
+      return -1
+    }
+    if (left.event.kind !== right.event.kind && right.event.kind === 'player_resumed') {
+      return 1
+    }
     return left.order - right.order
   })
 

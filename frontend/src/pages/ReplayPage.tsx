@@ -536,6 +536,13 @@ export default function ReplayPage() {
     watchingPlayerIdRef.current = initSeats[watchingSeat]?.player_id ?? null
   }, [activeRoundRecord])
 
+  // Keep watchingPlayerIdRef in sync when the user changes perspective manually
+  useEffect(() => {
+    if (!activeRoundRecord) return
+    const initSeats = activeRoundRecord.initial_seats ?? []
+    watchingPlayerIdRef.current = initSeats[watchingSeat]?.player_id ?? null
+  }, [watchingSeat, activeRoundRecord])
+
   if (!sessionIdentifier) {
     return (
       <div className="game-blocked">
