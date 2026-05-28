@@ -1127,7 +1127,7 @@ export class MahjongScene {
 
       this.names[localDir] = displayPlayerName(seat.username)
       this.scores[localDir] = seat.score
-      this.present[localDir] = (this.presentationMode === 'replay' && this.replayRecordVersion < 5) ? true : !(seat.afk || seat.disconnected)
+      this.present[localDir] = (this.presentationMode === 'replay' && this.replayRecordVersion < 6) ? true : !(seat.afk || seat.disconnected)
 
       // River tiles
       for (const tid of seat.discard_pile) {
@@ -1489,7 +1489,7 @@ export class MahjongScene {
       const dir = transDir(ss.seat_index as number, this.selfDir)
       this.names[dir] = displayPlayerName(ss.username)
       this.scores[dir] = ss.score as number ?? 0
-      this.present[dir] = (this.presentationMode === 'replay' && this.replayRecordVersion < 5) ? true : !((ss.afk as boolean) || Boolean(ss.disconnected))
+      this.present[dir] = (this.presentationMode === 'replay' && this.replayRecordVersion < 6) ? true : !((ss.afk as boolean) || Boolean(ss.disconnected))
       this.stateDisplay.setScore(this.names[dir], this.scores[dir], dir, !this.present[dir])
     }
     // Current direction comes directly from backend state.
@@ -1544,14 +1544,14 @@ export class MahjongScene {
   }
 
   handlePlayerLeft(seat: number): void {
-    if (this.presentationMode === 'replay' && this.replayRecordVersion < 5) return
+    if (this.presentationMode === 'replay' && this.replayRecordVersion < 6) return
     const dir = transDir(seat, this.selfDir)
     this.present[dir] = false
     this.stateDisplay.setPresent(dir, false)
   }
 
   handlePlayerResumed(seat: number): void {
-    if (this.presentationMode === 'replay' && this.replayRecordVersion < 5) return
+    if (this.presentationMode === 'replay' && this.replayRecordVersion < 6) return
     const dir = transDir(seat, this.selfDir)
     this.present[dir] = true
     this.stateDisplay.setPresent(dir, true)
