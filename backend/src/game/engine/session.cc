@@ -3034,7 +3034,7 @@ void ActiveSession::process_transition(const Event& transition) {
 			if (transition.ui64_value.value_or(0) == 15) {
 				fallback_delay_ms = GameConfig::minimal_transition_ms * 3;
 			} else {
-				fallback_delay_ms = GameConfig::minimal_transition_ms / 2;
+				fallback_delay_ms = static_cast<int>(GameConfig::minimal_transition_ms * 0.55);
 			}
 			break;
 
@@ -3043,7 +3043,7 @@ void ActiveSession::process_transition(const Event& transition) {
 	}
 
 	if (IsSyncCheckpoint(transition.kind)) {
-		next_timer_delay_ms = std::max(next_timer_delay_ms, max_delivery_delay_ms + GameConfig::minimal_transition_ms);
+		next_timer_delay_ms = std::max(next_timer_delay_ms, max_delivery_delay_ms + fallback_delay_ms);
 		next_transition_not_before_ms_ = dispatch_now_ms + max_delivery_delay_ms + fallback_delay_ms;
 	}
 
