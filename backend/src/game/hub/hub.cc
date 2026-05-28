@@ -509,6 +509,18 @@ auto GameHub::connect_player(const ConnectPlayerRequest& request) -> util::Statu
                 return util::Status::NotFound("session not found");
             }
 
+            target_session = pending_it->second.get();
+
+            // Try joining the new session BEFORE mutating the old session's
+            // bookkeeping.  If the join fails (e.g. session became full between
+            // the lobby snapshot and now) we must keep the player in their
+            // original session, not leave them in a ghost seat.
+            const auto player = UpsertKnownPlayer(known_players_, request.player);
+            const auto join_status = target_session->join_player(auth::PlayerProfilePtr(player));
+            if (!join_status.ok()) {
+                return join_status;
+            }
+
             auto previous_it = player_pending_sessions_.find(request.player.player_id);
             if (previous_it != player_pending_sessions_.end() && previous_it->second != *request.session_id) {
                 previous_pending_session_id = previous_it->second;
@@ -519,15 +531,7 @@ auto GameHub::connect_player(const ConnectPlayerRequest& request) -> util::Statu
                 player_pending_sessions_.erase(previous_it);
             }
 
-            const auto player = UpsertKnownPlayer(known_players_, request.player);
-            target_session = pending_it->second.get();
             player_pending_sessions_[request.player.player_id] = *request.session_id;
-
-            const auto join_status = target_session->join_player(auth::PlayerProfilePtr(player));
-            if (!join_status.ok()) {
-                player_pending_sessions_.erase(request.player.player_id);
-                return join_status;
-            }
         }
     }
 
