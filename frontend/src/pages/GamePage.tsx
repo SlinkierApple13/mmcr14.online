@@ -115,6 +115,7 @@ export default function GamePage() {
       if (cancelled || !mounted) return
       setSceneReady(true)
       scene.setVolume(loadStoredVolume())
+      scene.setOnConnectionLost(() => notify('网络连接已断开'))
       // Preload sounds
       const soundFiles = [
         '01-start', '03-cd', '05-draw', '06-discard',

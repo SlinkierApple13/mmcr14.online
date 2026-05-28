@@ -1818,6 +1818,9 @@ private:
 				continue;
 			}
 			if (auto connection = entry.connection.lock()) {
+				if (!connection->connected()) {
+					continue;
+				}
 				live_connections.push_back(std::move(connection));
 			}
 		}
@@ -3463,7 +3466,11 @@ public:
 			connection,
 			context->player_id(),
 			context->route());
-		if (!still_connected && context->registered_with_hub()) {
+		// Only disconnect from the hub for game-route WebSocket drops.
+		// Lobby-route connections close naturally when the player navigates
+		// to the game page — we must not kick them from a pending session.
+		if (!still_connected && context->registered_with_hub() &&
+			context->route() == WebSocketRoute::kGame) {
 			(void)state_->DisconnectPlayer(game::DisconnectPlayerRequest{
 				.player_id = context->player_id(),
 			});

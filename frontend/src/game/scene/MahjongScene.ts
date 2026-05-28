@@ -149,11 +149,14 @@ export class MahjongScene {
     ownReady: boolean
     onToggleReady: () => void
   } | null = null
-  private latestLatencyPingId: number | null = null
+  private lastPongMs: number | null = null
+  private missedPongCount = 0
   private latencyHideTimeout: ReturnType<typeof setTimeout> | null = null
+  private pingIntervalId: ReturnType<typeof setInterval> | null = null
   private readonly latencyPingTimeouts = new Map<number, ReturnType<typeof setTimeout>>()
   private readonly latencyPingSentAt = new Map<number, number>()
   private latencyPingCounter = 0
+  private onConnectionLost: (() => void) | null = null
   private mountGeneration = 0
   private destroyed = false
   private hostElement: HTMLElement | null = null
@@ -175,6 +178,10 @@ export class MahjongScene {
 
   setReplayRecordVersion(version: number): void {
     this.replayRecordVersion = version
+  }
+
+  setOnConnectionLost(cb: () => void): void {
+    this.onConnectionLost = cb
   }
 
   setAppearance(appearance: SceneAppearanceSettings): void {
@@ -241,6 +248,7 @@ export class MahjongScene {
 
     this.createSubComponents()
     this.mounted = true
+    this.startPeriodicPing()
 
     if (this.deferredSnapshot) {
       const snapshot = this.deferredSnapshot
@@ -360,10 +368,6 @@ export class MahjongScene {
     }
     this.latencyPingTimeouts.clear()
     this.latencyPingSentAt.clear()
-    if (this.latencyHideTimeout !== null) {
-      clearTimeout(this.latencyHideTimeout)
-      this.latencyHideTimeout = null
-    }
   }
 
   private updateLatencyIndicator(value: string): void {
@@ -386,22 +390,39 @@ export class MahjongScene {
 
   private stopLatencyMeasurement(): void {
     this.clearLatencyPingTimeouts()
-    this.latestLatencyPingId = null
+    this.stopPeriodicPing()
+    this.lastPongMs = null
+    this.missedPongCount = 0
     this.updateLatencyIndicator('\u2014')
     this.setLatencyIndicatorVisible(false)
+  }
+
+  private startPeriodicPing(): void {
+    this.stopPeriodicPing()
+    if (this.presentationMode !== 'game') return
+    this.pingIntervalId = setInterval(() => {
+      this.sendLatencyPing()
+    }, 5000)
+  }
+
+  private stopPeriodicPing(): void {
+    if (this.pingIntervalId !== null) {
+      clearInterval(this.pingIntervalId)
+      this.pingIntervalId = null
+    }
   }
 
   private sendLatencyPing(): void {
     if (this.presentationMode !== 'game') return
 
     const identifier = ++this.latencyPingCounter
-    this.latestLatencyPingId = identifier
     this.latencyPingSentAt.set(identifier, Date.now())
     const timeoutId = setTimeout(() => {
       this.latencyPingTimeouts.delete(identifier)
       this.latencyPingSentAt.delete(identifier)
-      if (this.latestLatencyPingId === identifier) {
-        this.updateLatencyIndicator('\u2014')
+      ++this.missedPongCount
+      if (this.missedPongCount >= 2) {
+        this.onConnectionLost?.()
       }
     }, 3000)
     this.latencyPingTimeouts.set(identifier, timeoutId)
@@ -410,10 +431,12 @@ export class MahjongScene {
 
   private handleCountdownLatencyClick = (): void => {
     if (this.presentationMode !== 'game') return
-
-    this.updateLatencyIndicator('\u2014')
     this.setLatencyIndicatorVisible(true)
-    this.sendLatencyPing()
+    if (this.lastPongMs !== null) {
+      this.updateLatencyIndicator(`${this.lastPongMs} ms`)
+    } else {
+      this.updateLatencyIndicator('\u2014')
+    }
     if (this.latencyHideTimeout !== null) clearTimeout(this.latencyHideTimeout)
     this.latencyHideTimeout = setTimeout(() => {
       this.latencyHideTimeout = null
@@ -1884,11 +1907,8 @@ export class MahjongScene {
     }
     this.latencyPingSentAt.delete(identifier)
 
-    if (!this.latestLatencyPingId || this.latestLatencyPingId !== identifier) return
-
-    const pingMs = Math.max(0, Math.round(Date.now() - sentAt))
-    this.updateLatencyIndicator(`${pingMs} ms`)
-    this.setLatencyIndicatorVisible(true)
+    this.missedPongCount = 0
+    this.lastPongMs = Math.max(0, Math.round(Date.now() - sentAt))
   }
 
   private async primeAudio(audio: HTMLAudioElement): Promise<void> {

@@ -414,6 +414,8 @@ function LobbyPage() {
       }
     }
 
+    let missedPongCount = 0
+
     const scheduleReconnect = () => {
       if (cancelled || reconnectTimeoutRef.current !== null) {
         return
@@ -442,16 +444,22 @@ function LobbyPage() {
 
       socket.onopen = () => {
         clearReconnectTimer()
+        missedPongCount = 0
         socket.send(JSON.stringify({ type: 'lobby.list' }))
         clearPingInterval()
         pingIntervalRef.current = window.setInterval(() => {
           if (socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'ping' }))
+            missedPongCount += 1
+            if (missedPongCount >= 2) {
+              socket.close()
+            }
           }
-        }, 15_000)
+        }, 5_000)
       }
 
       socket.onmessage = (event) => {
+        missedPongCount = 0
         const envelope = JSON.parse(event.data) as { type?: string; payload?: LobbyListPayload }
         if (envelope.type === 'lobby.list.snapshot' && envelope.payload) {
           void applyLobbyPayload(envelope.payload)
