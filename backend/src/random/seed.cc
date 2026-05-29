@@ -7,16 +7,21 @@ namespace mmcr::random {
 
 namespace {
 
-auto CurrentNanoseconds() noexcept -> std::uint64_t {
-    return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
+auto NewEntropy() noexcept -> std::uint64_t {
+    std::uint64_t value;
+    value = std::chrono::steady_clock::now().time_since_epoch().count();
+    value ^= std::chrono::system_clock::now().time_since_epoch().count();
+    value ^= reinterpret_cast<std::uint64_t>(std::addressof(value));
+    return value;
 }
 
-auto GenerateValue(std::uint64_t seed) noexcept -> std::uint64_t {
-    std::mt19937_64 generator(seed);
-    return generator();
+auto FastMix(std::uint64_t seed) noexcept -> std::uint64_t {
+    seed ^= seed >> 33;
+    seed *= 0xff51afd7ed558ccdULL;
+    seed ^= seed >> 33;
+    seed *= 0xc4ceb9fe1a85ec53ULL;
+    seed ^= seed >> 33;
+    return seed;
 }
 
 }  // namespace
@@ -25,11 +30,11 @@ SeedContainer::SeedContainer(std::size_t capacity)
     : capacity_(capacity == 0 ? 1 : capacity) {}
 
 void SeedContainer::RecordTraffic() {
-    RecordTraffic(CurrentNanoseconds());
+    RecordTraffic(NewEntropy());
 }
 
-void SeedContainer::RecordTraffic(std::uint64_t timestamp_ns) {
-    const std::uint64_t generated = GenerateValue(timestamp_ns);
+void SeedContainer::RecordTraffic(std::uint64_t from_value) {
+    const std::uint64_t generated = FastMix(from_value);
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (queue_.size() == capacity_) {
@@ -39,10 +44,10 @@ void SeedContainer::RecordTraffic(std::uint64_t timestamp_ns) {
 }
 
 std::uint64_t SeedContainer::Extract() {
-    return Extract(CurrentNanoseconds());
+    return Extract(NewEntropy());
 }
 
-std::uint64_t SeedContainer::Extract(std::uint64_t timestamp_ns) {
+std::uint64_t SeedContainer::Extract(std::uint64_t from_value) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!queue_.empty()) {
         const std::uint64_t value = queue_.front();
@@ -51,7 +56,7 @@ std::uint64_t SeedContainer::Extract(std::uint64_t timestamp_ns) {
         return value;
     }
 
-    last_extracted_ = FallbackValue(timestamp_ns);
+    last_extracted_ = FallbackValue(from_value);
     return last_extracted_;
 }
 
@@ -69,8 +74,8 @@ std::uint64_t SeedContainer::last_extracted() const noexcept {
     return last_extracted_;
 }
 
-std::uint64_t SeedContainer::FallbackValue(std::uint64_t timestamp_ns) noexcept {
-    return GenerateValue(timestamp_ns ^ last_extracted_);
+std::uint64_t SeedContainer::FallbackValue(std::uint64_t from_value) noexcept {
+    return FastMix(from_value ^ last_extracted_);
 }
 
 util::StatusOr<std::vector<unsigned char>> DrawBytes(SeedContainer& container,

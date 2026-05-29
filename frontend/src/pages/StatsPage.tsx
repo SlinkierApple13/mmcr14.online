@@ -5,7 +5,7 @@ import {
   Card,
   Col,
   DatePicker,
-  Divider,
+  // Divider,
   Empty,
   Form,
   InputNumber,
@@ -578,7 +578,7 @@ export default function StatsPage() {
                 {/* Player-specific stats */}
                 {stats.player_name || stats.player_id ? (
                   <>
-                    <Col span={24}><Divider>玩家数据</Divider></Col>
+                    {/* <Col span={24}><Divider>玩家数据</Divider></Col> */}
                     {stats.player_mu !== undefined && (
                       <Col span={24}>
                         <Card size="small" style={{ marginBottom: 8, borderRadius: '10px', borderColor: 'rgba(0, 0, 0, 0.06)', boxShadow: '0 8px 20px rgba(0, 0, 0, 0.04)' }}>

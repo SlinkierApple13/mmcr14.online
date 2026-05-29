@@ -16,15 +16,15 @@ public:
     explicit SeedContainer(std::size_t capacity = 256);
 
     void RecordTraffic();
-    void RecordTraffic(std::uint64_t timestamp_ns);
+    void RecordTraffic(std::uint64_t from_value);
     [[nodiscard]] std::uint64_t Extract();
-    [[nodiscard]] std::uint64_t Extract(std::uint64_t timestamp_ns);
+    [[nodiscard]] std::uint64_t Extract(std::uint64_t from_value);
     [[nodiscard]] std::size_t size() const noexcept;
     [[nodiscard]] std::size_t capacity() const noexcept;
     [[nodiscard]] std::uint64_t last_extracted() const noexcept;
 
 private:
-    [[nodiscard]] std::uint64_t FallbackValue(std::uint64_t timestamp_ns) noexcept;
+    [[nodiscard]] std::uint64_t FallbackValue(std::uint64_t from_value) noexcept;
 
     mutable std::mutex mutex_;
     std::deque<std::uint64_t> queue_;
