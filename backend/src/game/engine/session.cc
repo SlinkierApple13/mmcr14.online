@@ -883,7 +883,7 @@ void ActiveSession::end_session(std::int64_t timestamp_ms, bool enqueue_record) 
 	}
 	next_transition_not_before_ms_ = 0;
 
-	if (session_end_callback_) {
+	if (session_end_callback_ && !config_.unranked) {
 		std::array<std::int64_t, 4> player_ids{};
 		for (int seat = 0; seat < 4; ++seat) {
 			const auto player = seats_[seat].player.lock();

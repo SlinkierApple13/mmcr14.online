@@ -360,6 +360,28 @@ auto GameHub::allocate_session_id_locked() -> util::StatusOr<std::int64_t> {
     return util::Status::Internal("failed to allocate a unique session id");
 }
 
+auto GameHub::allocate_unranked_session_id_locked() -> util::StatusOr<std::int64_t> {
+    constexpr std::int64_t kMinUnrankedId = 1'000'000;
+    constexpr std::int64_t kMaxUnrankedId = 9'999'999;
+    constexpr std::int64_t kUnrankedIdCount = kMaxUnrankedId - kMinUnrankedId + 1;
+
+    if (static_cast<std::int64_t>(pending_sessions_.size() + active_sessions_.size()) >=
+        kUnrankedIdCount) {
+        return util::Status::Internal("no unranked session ids available");
+    }
+
+    std::uniform_int_distribution<std::int64_t> distribution(kMinUnrankedId, kMaxUnrankedId);
+    for (std::int64_t attempts = 0; attempts < kUnrankedIdCount; ++attempts) {
+        const std::int64_t candidate = distribution(session_id_rng_);
+        if (pending_sessions_.contains(candidate) || active_sessions_.contains(candidate)) {
+            continue;
+        }
+        return candidate;
+    }
+
+    return util::Status::Internal("failed to allocate a unique unranked session id");
+}
+
 auto GameHub::create_session(const CreateGameSessionRequest& request)
     -> util::StatusOr<CreateGameSessionResult> {
     if (request.owner.player_id <= 0) {
@@ -369,10 +391,15 @@ auto GameHub::create_session(const CreateGameSessionRequest& request)
     auto game_config = request.game_config;
     if (request.queue_config.singleplayer) {
         game_config.recorded = false;
+        game_config.unranked = true;
     }
     if (game_config.debug_mode) {
         game_config.recorded = false;
     }
+    if (!game_config.recorded) {
+        game_config.unranked = true;
+    }
+    const bool use_unranked_id = game_config.unranked || !game_config.recorded;
 
     std::int64_t session_id = 0;
     {
@@ -383,7 +410,9 @@ auto GameHub::create_session(const CreateGameSessionRequest& request)
         }
 
         auto owner = UpsertKnownPlayer(known_players_, request.owner);
-        auto allocated_session_id = allocate_session_id_locked();
+        auto allocated_session_id = use_unranked_id
+            ? allocate_unranked_session_id_locked()
+            : allocate_session_id_locked();
         if (!allocated_session_id.ok()) {
             return allocated_session_id.status();
         }
