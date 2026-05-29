@@ -941,6 +941,15 @@ auto ParseGameConfig(const Json::Value& object) -> util::StatusOr<game::GameConf
 		config.recorded = false;
 	}
 
+	auto unranked = ReadOptionalBool(object, {"unranked"}, "unranked", config.unranked);
+	if (!unranked.ok()) {
+		return unranked.status();
+	}
+	config.unranked = unranked.value();
+	if (!config.recorded) {
+		config.unranked = true;
+	}
+
 	auto seat_shuffle_period = ReadOptionalInt(
 		object, {"seat_shuffle_period", "seatShufflePeriod"}, "seat_shuffle_period", config.seat_shuffle_period);
 	if (!seat_shuffle_period.ok()) {
@@ -2910,7 +2919,22 @@ public:
 
 			Json::Value resp(Json::objectValue);
 			resp["type"] = "stats";
-			resp["data"] = collection.value().ToJson(filter.exclude_superior_fans);
+			Json::Value data = collection.value().ToJson(filter.exclude_superior_fans);
+			if (filter.player_id.has_value()) {
+				auto& rating_service = state_->rating();
+				auto rating_result = rating_service.GetRating(*filter.player_id, 
+					std::chrono::duration_cast<std::chrono::seconds>(
+						std::chrono::system_clock::now().time_since_epoch()).count());
+				if (rating_result.ok()) {
+					const auto& rating = rating_result.value();
+					data["player_mu"] = rating.mu;
+					data["player_tau"] = rating.tau;
+					data["player_sigma"] = rating.sigma;
+					data["player_points"] = rating.points;
+					data["player_level"] = rating.level;
+				}
+			}
+			resp["data"] = std::move(data);
 			resp["tot_records"] = static_cast<Json::UInt64>(collection.value().rounds.size());
 			state_->SendWebSocketJson(connection,
 				MakeWebSocketEnvelope("stats", std::move(resp), request_id));

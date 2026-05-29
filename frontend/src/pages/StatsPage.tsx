@@ -31,6 +31,7 @@ import type { ColumnsType } from 'antd/es/table'
 import type { SorterResult } from 'antd/es/table/interface'
 import dayjs from 'dayjs'
 import { apiRequest, buildWebSocketUrl } from '../lib/backend'
+import { rankToChinese } from '../lib/chinese'
 import './StatsPage.css'
 
 const { Header, Content } = Layout
@@ -88,6 +89,11 @@ interface StatsData {
   avg_shoot_turn?: number
   player_name?: string
   player_id?: number
+  player_mu?: number
+  player_tau?: number
+  player_sigma?: number
+  player_points?: number
+  player_level?: number
 }
 
 interface RoundEntryRecord {
@@ -149,7 +155,7 @@ export default function StatsPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [recordSortField, setRecordSortField] = useState<RecordSortField>('time')
   const [recordSortOrder, setRecordSortOrder] = useState<RecordSortOrder>('desc')
-  const [showPlayerStats, setShowPlayerStats] = useState(false)
+  const [showPlayerStats, setShowPlayerStats] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
@@ -162,7 +168,7 @@ export default function StatsPage() {
   const playerHasSelection = Array.isArray(watchedPlayerName) && watchedPlayerName.length >= 1
 
   useEffect(() => {
-    if (!playerHasSelection) setShowPlayerStats(false)
+    if (playerHasSelection) setShowPlayerStats(true)
   }, [playerHasSelection])
 
   // ── Helpers ──────────────────────────────────────────────────────
@@ -500,7 +506,7 @@ export default function StatsPage() {
                     <Space>
                       <Switch checked={!!watchedIncludeNonstandard}
                         onChange={(checked) => filterForm.setFieldsValue({ include_nonstandard: checked })} />
-                      <Text>非标准对局</Text>
+                      <Text>休闲模式</Text>
                     </Space>
                     <Space>
                       <Switch checked={showPlayerStats && playerHasSelection}
@@ -514,7 +520,7 @@ export default function StatsPage() {
                   </Space>
                 </Form.Item>
                 <Form.Item name="exclude_superior_fans" hidden initialValue={false}><Switch /></Form.Item>
-                <Form.Item name="include_nonstandard" hidden initialValue={false}><Switch /></Form.Item>
+                <Form.Item name="include_nonstandard" hidden initialValue={true}><Switch /></Form.Item>
               </Col>
               <Col xs={16} sm={10} md={7}>
                 <Form.Item label=" ">
@@ -573,6 +579,18 @@ export default function StatsPage() {
                 {stats.player_name || stats.player_id ? (
                   <>
                     <Col span={24}><Divider>玩家数据</Divider></Col>
+                    {stats.player_mu !== undefined && (
+                      <Col span={24}>
+                        <Card size="small" style={{ marginBottom: 8, borderRadius: '10px', borderColor: 'rgba(0, 0, 0, 0.06)', boxShadow: '0 8px 20px rgba(0, 0, 0, 0.04)' }}>
+                          <Space direction="vertical" size={2}>
+                            <Text strong style={{ fontSize: '16px' }}>{playerList.find(p => p.player_id === stats.player_id)?.username || `#${stats.player_id}`}</Text>
+                            <Text style={{ fontSize: '13px', color: '#555' }}>
+                              {rankToChinese(stats.player_level ?? 0)} · {stats.player_points?.toFixed(2)}pts · R {stats.player_mu?.toFixed(2)}±{stats.player_tau?.toFixed(2)} · σ {stats.player_sigma?.toFixed(2)}
+                            </Text>
+                          </Space>
+                        </Card>
+                      </Col>
+                    )}
                     <Col xs={12} sm={8} md={6}><Statistic title="总小局数" value={stats.tot_rounds || 0} /></Col>
                     <Col xs={12} sm={8} md={6}><Statistic title="流局率" value={`${((stats.drawn_game_rate ?? 0) * 100).toFixed(2)}%`} /></Col>
                     <Col xs={12} sm={8} md={6}><Statistic title="和牌率" value={`${((stats.win_rate ?? 0) * 100).toFixed(2)}%`} /></Col>

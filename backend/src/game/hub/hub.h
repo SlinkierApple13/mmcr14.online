@@ -121,6 +121,7 @@ public:
 
 private:
 	[[nodiscard]] auto allocate_session_id_locked() -> util::StatusOr<std::int64_t>;
+	[[nodiscard]] auto allocate_unranked_session_id_locked() -> util::StatusOr<std::int64_t>;
 	[[nodiscard]] auto route_pending_message(const RouteGameMessageRequest& request,
 											 PendingSession& session) -> util::Status;
 	[[nodiscard]] auto route_active_message(const RouteGameMessageRequest& request,

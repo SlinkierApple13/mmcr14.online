@@ -71,6 +71,7 @@ interface CreateQueueValues {
   recorded: boolean
   singleplayer: boolean
   debug_mode: boolean
+  unranked: boolean
 }
 
 interface AuthFormValues {
@@ -147,12 +148,17 @@ function CreateQueueModal({
   const primaryTimerSeconds = Form.useWatch('primary_timer_seconds', form)
   const singleplayer = Form.useWatch('singleplayer', form) ?? false
   const debugMode = Form.useWatch('debug_mode', form) ?? false
+  // const unranked = Form.useWatch('unranked', form) ?? false
+  const recorded = Form.useWatch('recorded', form) ?? true
 
   useEffect(() => {
     if (singleplayer || debugMode) {
       form.setFieldValue('recorded', false)
     }
-  }, [form, singleplayer, debugMode])
+    if (!recorded || singleplayer || debugMode) {
+      form.setFieldValue('unranked', true)
+    }
+  }, [form, singleplayer, debugMode, recorded])
 
   const validateWholeSecondsInRange = useCallback(
     (value: number | null | undefined, min: number, max: number, label: string): Promise<void> => {
@@ -196,6 +202,7 @@ function CreateQueueModal({
           recorded: true,
           singleplayer: false,
           debug_mode: false,
+          unranked: false,
         }}
       >
         <Form.Item
@@ -283,6 +290,9 @@ function CreateQueueModal({
         </Form.Item>
         <Form.Item label="保留记录" name="recorded" valuePropName="checked">
           <Switch disabled={singleplayer || debugMode} />
+        </Form.Item>
+        <Form.Item label="休闲模式" name="unranked" valuePropName="checked">
+          <Switch disabled={singleplayer || debugMode || !recorded} />
         </Form.Item>
         <Form.Item label="单人游戏" name="singleplayer" valuePropName="checked">
           <Switch />
@@ -579,6 +589,7 @@ function LobbyPage() {
             round_count: values.total_rounds,
             recorded: values.singleplayer || values.debug_mode ? false : values.recorded,
             debug_mode: values.debug_mode,
+            unranked: values.unranked,
           },
           queue_config: {
             public_session: !values.singleplayer,

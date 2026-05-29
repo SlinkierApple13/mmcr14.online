@@ -30,6 +30,7 @@ struct GameConfig {
     int seat_shuffle_period{4};
     bool recorded{true};
     bool debug_mode{false};
+    bool unranked{false};
 
     static constexpr int with_margin(int base) {
         return base + network_delay_ms;
