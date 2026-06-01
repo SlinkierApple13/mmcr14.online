@@ -90,6 +90,7 @@ export default function GamePage() {
   const lastScRef = useRef(-1)
   const disposedRef = useRef(false)
   const authoritativeActiveRef = useRef(false)
+  const gameEndedRef = useRef(false)
   const endTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [gameRatings, setGameRatings] = useState<RatingCard[]>([])
   const [pendingRatings, setPendingRatings] = useState<RatingCard[]>([])
@@ -115,7 +116,10 @@ export default function GamePage() {
       if (cancelled || !mounted) return
       setSceneReady(true)
       scene.setVolume(loadStoredVolume())
-      scene.setOnConnectionLost(() => notify('网络连接已断开'))
+      scene.setOnConnectionLost(() => {
+        const s = socketRef.current
+        if (s) s.close()
+      })
       // Preload sounds
       const soundFiles = [
         '01-start', '03-cd', '05-draw', '06-discard',
@@ -170,6 +174,7 @@ export default function GamePage() {
 
       authoritativeActiveRef.current = false
       lastScRef.current = -1
+      gameEndedRef.current = false
       setPendingSnapshot(null)
       setPhase('loading')
 
@@ -234,6 +239,7 @@ export default function GamePage() {
               setGameRatings(snapRatings as Array<{ player_id: number; mu?: number; tau?: number; sigma?: number; points?: number; level?: number }>)
             }
             if (snap.state.ended) {
+              gameEndedRef.current = true
               scheduleLobbyReturn()
             }
           }
@@ -293,6 +299,7 @@ export default function GamePage() {
             }
           }
           if (isAuthoritativeEnd) {
+            gameEndedRef.current = true
             scheduleLobbyReturn()
           }
           return
@@ -374,9 +381,16 @@ export default function GamePage() {
 
       socket.onclose = () => {
         if (socketRef.current === socket) socketRef.current = null
-        if (disposedRef.current || intentionalClose) return
-        notify('连接已断开，正在重连…')
-        setTimeout(connect, 1500)
+        if (disposedRef.current || intentionalClose || gameEndedRef.current) return
+        notify('连接已断开，正在重连……')
+        let retries = 0
+        const tryReconnect = () => {
+          if (disposedRef.current || gameEndedRef.current) return
+          retries++
+          const delay = Math.min(1000 * retries, 8000)
+          setTimeout(connect, delay)
+        }
+        tryReconnect()
       }
     }
 
