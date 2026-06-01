@@ -19,7 +19,8 @@ constexpr double kDefaultPoints = 0.0;
 constexpr int kDefaultLevel = 0;
 
 constexpr double kTimeDeviationGrowthRate = 5e-7;  // δ² in s⁻¹
-constexpr double kVolatilityLearningRate = 1e9;     // η
+constexpr double kVolatilityLearningRate = 1e9;     // η (old learning rate for sigma2, deprecated)
+constexpr double kLogVolatilityLearningRate = 1e-2; // η (new learning rate for log sigma)
 constexpr double kPointAlpha = 0.85;
 constexpr double kPointBeta = 5.0;
 constexpr double kPointGamma = 1.0;
