@@ -969,18 +969,30 @@ void ActiveSession::end_wait(int seat, std::int64_t now) {
 	}
 }
 
-PendingStatus ActiveSession::get_pending_status(int seat, std::int64_t now) {
+PendingStatus ActiveSession::update_pending_status(int seat, std::int64_t now) {
 	if (seat < 0 || seat >= 4) {
 		return PendingStatus::kPendingNone;
 	}
 	Seat& s = seats_[seat];
+	// A seat whose wait is scheduled but has not yet started (pending_from_ms == 0
+	// while scheduled_pending_ still holds a value) must be reported as still
+	// pending. Falling through would set pending = kPendingNone and trigger the
+	// destructive end_wait() below, which resets scheduled_pending_[seat] and
+	// prevents the per-seat start timer from ever opening the wait.
+	if (scheduled_pending_[seat].has_value()) {
+		return *scheduled_pending_[seat];
+	}
 	if (s.pending_from_ms <= 0) {
 		s.pending = PendingStatus::kPendingNone;
 	}
 	if (s.pending == PendingStatus::kPendingPrimary) {
-		s.pending = (now - s.pending_from_ms > GameConfig::with_margin(config_.primary_timer_ms) + seats_[seat].auxiliary_ms) ? PendingStatus::kPendingNone : PendingStatus::kPendingPrimary;
+		s.pending = (now - s.pending_from_ms > 
+			GameConfig::with_margin(config_.primary_timer_ms) + seats_[seat].auxiliary_ms) ? 
+			PendingStatus::kPendingNone : PendingStatus::kPendingPrimary;
 	} else if (s.pending == PendingStatus::kPendingSecondary) {
-		s.pending = (now - s.pending_from_ms > GameConfig::with_margin(config_.secondary_timer_ms)) ? PendingStatus::kPendingNone : PendingStatus::kPendingSecondary;
+		s.pending = (now - s.pending_from_ms > 
+			GameConfig::with_margin(config_.secondary_timer_ms)) ? 
+			PendingStatus::kPendingNone : PendingStatus::kPendingSecondary;
 	}
 	if (s.pending == PendingStatus::kPendingNone) {
 		this->end_wait(seat, now);
@@ -1000,7 +1012,7 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 
 	auto claim_finalised = [this, &now]() {
 		for (int i = 0; i < 4; ++i) {
-			if (get_pending_status(i, now) != PendingStatus::kPendingNone) {
+			if (update_pending_status(i, now) != PendingStatus::kPendingNone) {
 				return false;
 			}
 		}
@@ -1012,7 +1024,7 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 		time_left_ms = std::max(time_left_ms, 
 			minimum_after_last - static_cast<int>(now - (transition_queue_.empty() ? now : transition_queue_.back().timestamp_ms)));
 		for (int i = 0; i < 4; ++i) {
-			auto pending_status = get_pending_status(i, now);
+			auto pending_status = update_pending_status(i, now);
 			if (pending_status == PendingStatus::kPendingPrimary) {
 				const int seat_time_left_ms = GameConfig::with_margin(config_.primary_timer_ms) + seats_[i].auxiliary_ms - static_cast<int>(now - seats_[i].pending_from_ms);
 				time_left_ms = std::max(time_left_ms, seat_time_left_ms);
@@ -1119,8 +1131,8 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 				event.kind != EventKind::kConcealedKong && event.kind != EventKind::kSelfDrawnWin) {
 				return util::Status::InvalidArgument("invalid event kind in current state");
 			}
-			if (get_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
-				get_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
+			if (update_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
+				update_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
 				return util::Status::InvalidArgument("player does not have a pending decision");
 			}
 			// 6a. discard
@@ -1206,8 +1218,8 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 				return util::Status::InvalidArgument("invalid event kind in current state");
 			}
 			const Seat& seat = seats_[event.actor_seat];
-			if (get_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
-				get_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
+			if (update_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
+				update_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
 				return util::Status::InvalidArgument("player does not have a pending decision");
 			}
 			// 7a. chow
@@ -1249,8 +1261,8 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 				return util::Status::InvalidArgument("invalid event kind in current state");
 			}
 			const Seat& seat = seats_[event.actor_seat];
-			if (get_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
-				get_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
+			if (update_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
+				update_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
 				return util::Status::InvalidArgument("player does not have a pending decision");
 			}
 			// 8a. rob added kong win
