@@ -381,7 +381,7 @@ private:
 
     int get_random_pause();
 
-    PendingStatus get_pending_status(int seat, std::int64_t now);
+    PendingStatus update_pending_status(int seat, std::int64_t now);
 };
 
 }  // namespace mmcr::game
