@@ -139,13 +139,18 @@ auto RatingService::UpdateAfterSession(const std::array<SessionScore, 4>& scores
             + (m / sum_denom) * (tau2 * tau2) / (denom_i * denom_i);
 
         const double diff = s[i] - s_q_bar;
-        const double sigma2_new = sigma2
-            + (kVolatilityLearningRate / (denom_i * denom_i))
-                * ((diff * diff / m) - denom_i + (1.0 / sum_denom));
+        // old volatility update is deprecated because SGD on sigma2 is instable
+        // const double sigma2_new = sigma2
+        //     + (kVolatilityLearningRate / (denom_i * denom_i))
+        //         * ((diff * diff / m) - denom_i + (1.0 / sum_denom));
+        // use SGD on log sigma instead
+        const double sigma_new = ratings[i].sigma * std::exp(
+            kLogVolatilityLearningRate * 2 * sigma2 / (denom_i * denom_i) 
+                * ((diff * diff / m) - denom_i + (1.0 / sum_denom)));
 
         ratings[i].mu = mu_new;
         ratings[i].tau = std::sqrt(std::max(tau2_new, 0.0));
-        ratings[i].sigma = std::sqrt(std::max(sigma2_new, 0.0));
+        ratings[i].sigma = sigma_new;
         ratings[i].last_update_ts = now_ts;
 
         ratings[i].total_games += round_count;
@@ -175,9 +180,7 @@ auto RatingService::ComputeRankLevel(double points, int previous_level) const ->
             case 2: return 8.0;
             case 3: return 11.0;
             case 4: return 14.0;
-            case 5: return 17.0;
-            case 6: return 19.0;
-            default: return 2.0 * static_cast<double>(l) + 7.0;
+            default: return 2.0 * static_cast<double>(l) + 6.0;
         }
     };
     // Find smallest l' >= 1 such that P < T_{l'}
