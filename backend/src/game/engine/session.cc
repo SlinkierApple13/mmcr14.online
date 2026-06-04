@@ -573,9 +573,6 @@ void ActiveSession::capture_round_record_state(const Event& transition) {
 		return;
 	}
 
-	current_round_turn_ = 1;
-	current_round_turn_actor_ = 0;
-	current_round_meld_count_.fill(0);
 	current_round_start_snapshot_ = transition.round_start_snapshot;
 	current_round_initial_seats_ = Json::Value(Json::arrayValue);
 	for (const auto& seat : seats_) {
@@ -986,16 +983,16 @@ PendingStatus ActiveSession::update_pending_status(int seat, std::int64_t now) {
 		s.pending = PendingStatus::kPendingNone;
 	}
 	if (s.pending == PendingStatus::kPendingPrimary) {
-		s.pending = (now - s.pending_from_ms > 
-			GameConfig::with_margin(config_.primary_timer_ms) + seats_[seat].auxiliary_ms) ? 
-			PendingStatus::kPendingNone : PendingStatus::kPendingPrimary;
+		if (now - s.pending_from_ms > 
+			GameConfig::with_margin(config_.primary_timer_ms) + seats_[seat].auxiliary_ms) {
+			this->end_wait(seat, now);
+		}
 	} else if (s.pending == PendingStatus::kPendingSecondary) {
-		s.pending = (now - s.pending_from_ms > 
-			GameConfig::with_margin(config_.secondary_timer_ms)) ? 
-			PendingStatus::kPendingNone : PendingStatus::kPendingSecondary;
-	}
-	if (s.pending == PendingStatus::kPendingNone) {
-		this->end_wait(seat, now);
+		if (now - s.pending_from_ms > 
+			GameConfig::with_margin(config_.secondary_timer_ms)) {
+			this->end_wait(seat, now);
+			s.pending = PendingStatus::kPendingSlept;
+		}
 	}
 	return s.pending;
 }
@@ -1419,14 +1416,14 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 	}
 
 	if (afk_status_broadcast.has_value()) {
-		Event event{
+		Event event_{
 			.kind = *afk_status_broadcast,
 			.actor_seat = event.actor_seat,
 			.timestamp_ms = now,
 			.stage_counter = event.stage_counter,
 		};
-		event_queue_.push_back(event);
-		broadcast_claim(event);
+		event_queue_.push_back(event_);
+		broadcast_claim(event_);
 	}
 
 	return util::Status::Ok();
@@ -1452,7 +1449,7 @@ void ActiveSession::execute_transition() {
 	transition.timestamp_ms = now;
 	if (transition.kind == EventKind::kStart) {
 		current_round_turn_ = 0;
-		current_round_turn_actor_ = 0;
+		current_round_turn_actor_ = 3;
 		current_round_meld_count_.fill(0);
 	}
 	transition.round_turn =
@@ -2517,6 +2514,9 @@ auto MsgOnClaim(const Event& event,
 				if (seat == event.actor_seat || seats[seat].avail_melds_other == 0) {
 					continue;
 				}
+				if (seats[seat].pending == PendingStatus::kPendingSlept) {
+					continue;
+				}
 				policies[seat].set_pending = PendingStatus::kPendingSecondary;
 			}
 			break;
@@ -2533,6 +2533,7 @@ auto MsgOnTransition(const Event& transition,
 			      const std::array<bool, 4>& interval_delayed_seats,
 			      const std::array<bool, 4>& next_interval_delayed_seats,
 			      const std::optional<Event>& previous_transition,
+			      std::int64_t last_claim_delivery_ms,
 			      std::int64_t dispatch_now_ms,
 			      int random_pause_ms) -> std::array<MsgPolicy, 4> {
 	std::array<MsgPolicy, 4> policies{};
@@ -2540,10 +2541,15 @@ auto MsgOnTransition(const Event& transition,
 	for (int seat = 0; seat < 4; ++seat) {
 		std::int64_t deliver_at_ms = dispatch_now_ms;
 		if (IsSyncCheckpoint(transition.kind)) {
-			if (previous_transition.has_value() && seat != transition.actor_seat && interval_delayed_seats[seat]) {
+			if (seat != transition.actor_seat && interval_delayed_seats[seat]) {
+				if (previous_transition.has_value()) {
+					deliver_at_ms = std::max<std::int64_t>(
+						deliver_at_ms,
+						previous_transition->timestamp_ms + GameConfig::meld_offset_ms + GameConfig::minimal_transition_ms);
+				}
 				deliver_at_ms = std::max<std::int64_t>(
 					deliver_at_ms,
-					previous_transition->timestamp_ms + GameConfig::meld_offset_ms + GameConfig::minimal_transition_ms);
+					last_claim_delivery_ms + GameConfig::minimal_transition_ms);
 			}
 			if (next_interval_delayed_seats[seat] && seat != transition.actor_seat) {
 				deliver_at_ms += GameConfig::meld_offset_ms;
@@ -2580,6 +2586,9 @@ auto MsgOnTransition(const Event& transition,
 					continue;
 				}
 				if (seats[seat].is_afk()) {
+					continue;
+				}
+				if (seats[seat].pending == PendingStatus::kPendingSlept) {
 					continue;
 				}
 				if (seat == (transition.actor_seat + 1) % 4) {
@@ -2872,12 +2881,7 @@ int ActiveSession::get_random_pause() {
  * 3. Concealed kong.
  * 4. Self-drawn win.
  * A basic interval starts from a sync checkpoint and ends at the next sync checkpoint. 
- * After a self-drawn win, the next state transition will be kStart,
- * so no need to do anything special.
- * If an interval starts with concealed kong, also do nothing special since 
- * it cannot trigger meld options from other players.
- * If an interval starts with a discard tile or an added kong, the three players other than
- * the actor might have meld options. We use this algorithm to hide meld pauses:
+ * We use this algorithm to hide meld pauses:
  * 1. After the start transition, check which players have meld options.
  *    If no players or all players have meld options, do nothing special.
  *    Otherwise, mark those without meld options as "delayed."
@@ -2886,9 +2890,10 @@ int ActiveSession::get_random_pause() {
  *    transition, whose rules are listed below.
  * 3. If the ending transition is at least Config::meld_offset_ms after the second to last
  *    transition, broadcast it normally. Otherwise, broadcast it immediately for the actor,
- *    but delay it until Config::meld_offset_ms after the second to last transition for
- *    other players. Note that since the ending transition also marks the start of the 
- *    next basic interval, if that interval triggers the "delayed" players rule, the
+ *    but delay it until Config::meld_offset_ms after the second to last transition or
+ *    the last claim event (except player left and player resumed), whichever is later,
+ *    for the other players. Note that since the ending transition also marks the start of
+ *    the next basic interval, if that interval triggers the "delayed" players rule, the
  *    broadcast of the ending transition to those players will be further delayed.
  * 4. On top of the above rules, an extra delay of a random duration between 0 and 
  *    Config::random_pause_range is applied with probability Config::random_pause_prob
@@ -2925,6 +2930,8 @@ void ActiveSession::broadcast_claim(const Event& event) {
 
 	const std::int64_t dispatch_now_ms = now_ms();
 	auto policies = MsgOnClaim(event, seats_, interval_delayed_seats_, dispatch_now_ms);
+	const bool track_claim_delivery =
+		event.kind != EventKind::kPlayerLeft && event.kind != EventKind::kPlayerResumed;
 	for (int seat = 0; seat < 4; ++seat) {
 		if (event.kind == EventKind::kPlayerResumed && seat == event.actor_seat) {
 			continue;
@@ -2936,7 +2943,12 @@ void ActiveSession::broadcast_claim(const Event& event) {
 			policies[seat].delay_ms,
 			state_.stage_counter);
 		policies[seat].msg = build_event_message_for_player(seat, event, "claim");
-		(void)send_message(seat, policies[seat].msg, policies[seat].delay_ms);
+		const int actual_delay_ms =
+			send_message(seat, policies[seat].msg, policies[seat].delay_ms);
+		if (track_claim_delivery) {
+			last_claim_delivery_ms_ =
+				std::max(last_claim_delivery_ms_, dispatch_now_ms + actual_delay_ms);
+		}
 	}
 }
 
@@ -2987,6 +2999,7 @@ void ActiveSession::process_transition(const Event& transition) {
 		interval_delayed_seats_,
 		next_interval_delayed_seats,
 		previous_transition,
+		last_claim_delivery_ms_,
 		dispatch_now_ms,
 		random_pause_ms);
 

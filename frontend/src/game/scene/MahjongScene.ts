@@ -25,6 +25,7 @@ import type { ActiveSessionSnapshot, SeatSnapshot } from './types'
 export type { AutoWinMode, WaitInfoData }
 
 const DUANG_CUTOFF = 18.495
+const AUTO_WIN_DELAY_MS = 1600
 const PASS_DEBOUNCE_MS = 200
 
 type ViewerSyncContext = {
@@ -544,6 +545,23 @@ export class MahjongScene {
     return true
   }
 
+  private scheduleAutoWinAction(action: Record<string, any>): boolean {
+    this.clearAutoActionTimeout()
+    this.countdown.stop()
+    this.clearMeldChoices()
+    this.hands[0].unwaitDiscard()
+    this.waitDisplay.visible = false
+    this.autoActionTimeout = setTimeout(() => {
+      this.autoActionTimeout = null
+      const liveAction = this.findAvailableAction([action.kind])
+      if (!liveAction) {
+        return
+      }
+      this.triggerAutoAction(liveAction)
+    }, AUTO_WIN_DELAY_MS)
+    return true
+  }
+
   private tryAutoHelperAction(context: ViewerSyncContext | null): boolean {
     const selfWinAction = this.findAvailableAction(['self_drawn_win'])
     const claimWinAction = this.findAvailableAction(['discard_win', 'rob_added_kong_win'])
@@ -551,10 +569,10 @@ export class MahjongScene {
     const selfKongAction = this.findAvailableAction(['added_kong', 'concealed_kong'])
 
     if (this.autoWin === 2 && selfWinAction) {
-      return this.triggerAutoAction(selfWinAction)
+      return this.scheduleAutoWinAction(selfWinAction)
     }
     if (this.autoWin === 2 && claimWinAction) {
-      return this.triggerAutoAction(claimWinAction)
+      return this.scheduleAutoWinAction(claimWinAction)
     }
     if (
       this.autoWin === 1
@@ -563,7 +581,7 @@ export class MahjongScene {
       && (context.kind === 'discard_win' || context.kind === 'rob_added_kong_win')
       && claimWinAction
     ) {
-      return this.triggerAutoAction(claimWinAction)
+      return this.scheduleAutoWinAction(claimWinAction)
     }
     if (this.noMeld && nonWinClaimAction && !claimWinAction) {
       const denyAction = this.findAvailableAction([/*'pass', */'final_pass'])
