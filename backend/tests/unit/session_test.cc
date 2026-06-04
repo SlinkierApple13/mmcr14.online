@@ -135,6 +135,25 @@ TEST(ActiveSessionTest, ForcedDiscardRecordsDiscardPileAndCountsAfk) {
 	EXPECT_FALSE(harness.session.seats_[actor_seat].has_drawn_tile());
 }
 
+TEST(ActiveSessionTest, FirstDrawStaysOnTurnZeroUntilEastDiscards) {
+	SessionHarness harness;
+	StepToFirstDiscard(harness);
+
+	ASSERT_FALSE(harness.session.transition_queue_.empty());
+	const Event& first_draw = harness.session.transition_queue_.back();
+	EXPECT_EQ(first_draw.kind, EventKind::kDrawTile);
+	ASSERT_TRUE(first_draw.round_turn.has_value());
+	EXPECT_EQ(*first_draw.round_turn, 0);
+
+	StepOnce(harness);
+
+	ASSERT_FALSE(harness.session.transition_queue_.empty());
+	const Event& first_discard = harness.session.transition_queue_.back();
+	EXPECT_EQ(first_discard.kind, EventKind::kDiscardTile);
+	ASSERT_TRUE(first_discard.round_turn.has_value());
+	EXPECT_EQ(*first_discard.round_turn, 1);
+}
+
 TEST(ActiveSessionTest, RejectsWrongSeatAndStaleDiscardMessages) {
 	SessionHarness harness;
 	StepToFirstDiscard(harness);

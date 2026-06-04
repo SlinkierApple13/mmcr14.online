@@ -20,7 +20,7 @@ struct GameConfig {
     static constexpr int meld_offset_ms{1450};
     static constexpr int meld_pause_ms{750};
     static constexpr int random_pause_range{1450};
-    static constexpr int round_interval_ms{5000};
+    static constexpr int round_interval_ms{7500};
     static constexpr double random_pause_prob{0.11};
 
     int primary_timer_ms{7000};

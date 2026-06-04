@@ -80,6 +80,7 @@ export class MeldChoices extends Container {
     const hasPass = ordered.some((a) => a.kind === 'pass')
     const hasFinalPass = ordered.some((a) => a.kind === 'final_pass')
     const hasBothPass = hasPass && hasFinalPass
+    const showFinalPassAsPass = !hasPass && hasFinalPass
     const size = ordered.length - (hasBothPass ? 1 : 0)
 
     let index = 0
@@ -89,7 +90,9 @@ export class MeldChoices extends Container {
       const x = useLeft ? -2 * this.x : 0
       const y = useLeft ? offsetLeft : offset
 
-      const meldType = actionKindToMeldType(action.kind)
+      const meldType = showFinalPassAsPass && action.kind === 'final_pass'
+        ? 'pass'
+        : actionKindToMeldType(action.kind)
       const tile = action.tile ?? reactionTile ?? 0
       const chowMode = action.kind === 'chow' ? Math.max(0, (action.ui64_value ?? 1) - 1) : 0
       

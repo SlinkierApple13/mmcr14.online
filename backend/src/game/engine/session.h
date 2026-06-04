@@ -324,6 +324,7 @@ private:
     std::array<Timer, 4> pending_start_timers_{};
     std::array<std::optional<PendingStatus>, 4> scheduled_pending_{};
     std::array<bool, 4> interval_delayed_seats_{};
+    std::int64_t last_claim_delivery_ms_{0};
     std::int64_t next_transition_not_before_ms_{0};
     random::SeedContainer* seed_container_{nullptr};
     GameHub* hub_{nullptr};
