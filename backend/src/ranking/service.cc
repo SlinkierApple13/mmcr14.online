@@ -145,7 +145,7 @@ auto RatingService::UpdateAfterSession(const std::array<SessionScore, 4>& scores
         //         * ((diff * diff / m) - denom_i + (1.0 / sum_denom));
         // use SGD on log sigma instead
         const double sigma_new = ratings[i].sigma * std::exp(
-            kLogVolatilityLearningRate * 2 * sigma2 / (denom_i * denom_i) 
+            kLogVolatilityLearningRate * sigma2 / (denom_i * denom_i) 
                 * ((diff * diff / m) - denom_i + (1.0 / sum_denom)));
 
         ratings[i].mu = mu_new;
