@@ -8,6 +8,7 @@ namespace mmcr::random {
 namespace {
 
 auto NewEntropy() noexcept -> std::uint64_t {
+    // std::random_device is completely garbage
     std::uint64_t value;
     value = std::chrono::steady_clock::now().time_since_epoch().count();
     value ^= std::chrono::system_clock::now().time_since_epoch().count();
