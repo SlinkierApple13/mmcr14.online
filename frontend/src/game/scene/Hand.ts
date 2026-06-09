@@ -662,7 +662,7 @@ export class Hand extends Container {
 
   mKongFromHand(tid: number, useDrawnTile: boolean): void {
     let tile: Tile | null = null
-    if (useDrawnTile && this.drawnTile && this.drawnTile.tid === tid) { tile = this.drawnTile; this.drawnTile = null }
+    if (useDrawnTile && this.drawnTile) { tile = this.drawnTile; this.drawnTile = null }
     else tile = this.popFromHand(tid)
     if (!tile) return
     this.unwaitDiscard(); tile.updateTid(tid); tile.show()
