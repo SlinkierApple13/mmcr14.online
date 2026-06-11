@@ -243,7 +243,6 @@ public:
                   std::int64_t session_id,
                   std::array<auth::PlayerProfilePtr, 4> players,
                   GameConfig config,
-                  bool public_session,
                   storage::GameRecordManager* record_manager = nullptr);
 
     using SessionEndCallback = std::function<void(
@@ -281,7 +280,7 @@ public:
     }
 
     [[nodiscard]] auto public_session() const noexcept -> bool {
-        return public_session_;
+        return config_.public_session;
     }
 
     [[nodiscard]] auto ended() const noexcept -> bool {
@@ -333,7 +332,6 @@ private:
     std::int64_t session_id_{-1};
     std::uint64_t session_init_timestamp_ns_{0};
     std::string session_identifier_;
-    bool public_session_{true};
     bool ended_{false};
     std::int64_t ended_at_ms_{0};
     std::array<int, 4> final_scores_{};

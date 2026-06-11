@@ -56,6 +56,7 @@ auto SerializeRecordGameConfig(const GameConfig& config) -> Json::Value {
 	payload["seat_shuffle_period"] = config.seat_shuffle_period;
 	payload["recorded"] = config.recorded;
 	payload["debug_mode"] = config.debug_mode;
+	payload["public_session"] = config.public_session;
 	return payload;
 }
 
@@ -545,14 +546,12 @@ ActiveSession::ActiveSession(random::SeedContainer* seed_container,
 							 std::int64_t session_id,
 							 std::array<auth::PlayerProfilePtr, 4> players,
 							 GameConfig config,
-							 bool public_session,
 							 storage::GameRecordManager* record_manager)
 	: config_(std::move(config)),
 	  seed_container_(seed_container),
 	  hub_(hub),
 	  record_manager_(record_manager),
-	  session_id_(session_id),
-	  public_session_(public_session) {
+	  session_id_(session_id) {
 	if (recording_enabled()) {
 		session_init_timestamp_ns_ = now_ns();
 		session_identifier_ =
@@ -1672,7 +1671,7 @@ void ActiveSession::execute_transition() {
 				std::shuffle(seats_.begin(), seats_.end(), std::mt19937_64(seed));
 				snapshot.seat_shuffle_seed = seed;
 			} else {
-				std::rotate(seats_.rbegin(), seats_.rbegin() + 1, seats_.rend());
+				std::rotate(seats_.rbegin(), seats_.rbegin() + 3, seats_.rend());
 				snapshot.seat_shuffle_seed = std::nullopt;
 			}
 			++state_.round_counter;

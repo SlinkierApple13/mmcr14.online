@@ -950,6 +950,16 @@ auto ParseGameConfig(const Json::Value& object) -> util::StatusOr<game::GameConf
 		config.unranked = true;
 	}
 
+	auto public_session = ReadOptionalBool(
+		object,
+		{"public_session", "public", "is_public", "isPublic"},
+		"public_session",
+		config.public_session);
+	if (!public_session.ok()) {
+		return public_session.status();
+	}
+	config.public_session = public_session.value();
+
 	auto seat_shuffle_period = ReadOptionalInt(
 		object, {"seat_shuffle_period", "seatShufflePeriod"}, "seat_shuffle_period", config.seat_shuffle_period);
 	if (!seat_shuffle_period.ok()) {
@@ -1033,7 +1043,7 @@ auto BuildPendingSummary(const game::PendingSession& session) -> game::PendingSe
 		.auxiliary_timer_ms = session.game_config().auxiliary_timer_ms,
 		.round_count = session.game_config().round_count,
 		.recorded = session.game_config().recorded,
-		.public_session = session.queue_config().public_session,
+		.public_session = session.game_config().public_session,
 		.can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
 		.can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
 					 ready_seat_count == static_cast<int>(session.seats().size()),
@@ -1162,7 +1172,7 @@ auto ActiveSessionContainsPlayer(const game::ActiveSession& session, std::int64_
 
 auto CanViewPendingSession(const game::PendingSession& session,
 				   std::optional<std::int64_t> viewer_player_id) -> bool {
-	return session.queue_config().public_session ||
+	return session.game_config().public_session ||
 		(viewer_player_id.has_value() && PendingSessionContainsPlayer(session, *viewer_player_id));
 }
 
@@ -2549,6 +2559,35 @@ auto BuildSessionSnapshotPayload(ServerState& state,
 	return active_session.value()->build_snapshot_for_player_id(*viewer_player_id);
 }
 
+auto BuildCreatedSessionSnapshotPayload(ServerState& state,
+					 std::int64_t session_id,
+					 std::int64_t owner_player_id)
+	-> util::StatusOr<Json::Value> {
+	auto pending_session = state.FindPendingSession(session_id);
+	if (pending_session.ok()) {
+		std::array<std::int64_t, 4> player_ids{};
+		const auto& seats = pending_session.value()->seats();
+		for (std::size_t i = 0; i < seats.size(); ++i) {
+			const auto player = seats[i].player.lock();
+			player_ids[i] = (player != nullptr) ? player->player_id : 0;
+		}
+		auto ratings_json = state.get_player_ratings(player_ids);
+		Json::Value ratings_arr(Json::arrayValue);
+		for (const auto& r : ratings_json) {
+			ratings_arr.append(r.ToJson());
+		}
+		return SerializePendingSnapshot(*pending_session.value(), ratings_arr);
+	}
+	if (pending_session.status().code() != util::StatusCode::kNotFound) {
+		return pending_session.status();
+	}
+
+	return BuildSessionSnapshotPayload(
+		state,
+		session_id,
+		std::optional<std::int64_t>(owner_player_id));
+}
+
 auto BuildReplaySessionPayload(const ServerState& state,
 				   std::string_view session_identifier)
 	-> util::StatusOr<Json::Value> {
@@ -3404,10 +3443,6 @@ public:
 					(void)send_resume_required(target_session_id);
 					return;
 				}
-				if (pending_session_id.has_value() && *pending_session_id == target_session_id) {
-					(void)send_snapshot(target_session_id);
-					return;
-				}
 
 				auto status = state_->ConnectPlayer(
 					{.player = *player, .session_id = target_session_id});
@@ -3962,10 +3997,10 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
 				return;
 			}
 
-			auto snapshot = BuildSessionSnapshotPayload(
+			auto snapshot = BuildCreatedSessionSnapshotPayload(
 				*state,
 				created.value().session_id,
-				std::optional<std::int64_t>(authenticated.value().player.player_id));
+				authenticated.value().player.player_id);
 			if (!snapshot.ok()) {
 				callback(NewStatusErrorResponse(snapshot.status()));
 				return;
