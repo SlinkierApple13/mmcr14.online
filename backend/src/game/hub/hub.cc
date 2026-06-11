@@ -163,7 +163,7 @@ auto BuildPendingSummary(const PendingSession& session) -> PendingSessionSummary
         .round_count = session.game_config().round_count,
         .recorded = session.game_config().recorded,
         .debug_mode = session.game_config().debug_mode,
-        .public_session = session.queue_config().public_session,
+        .public_session = session.game_config().public_session,
         .can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
         .can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
                      ready_seat_count == static_cast<int>(session.seats().size()),
@@ -436,7 +436,6 @@ auto GameHub::create_session(const CreateGameSessionRequest& request)
                     session_id,
                     players,
                     game_config,
-                    false,
                     record_manager_));
             if (auto it = active_sessions_.find(session_id); it != active_sessions_.end() && transport_ != nullptr) {
                 it->second->set_session_end_callback(
@@ -454,12 +453,7 @@ auto GameHub::create_session(const CreateGameSessionRequest& request)
                 std::make_unique<PendingSession>(
                     this, session_id, game_config, request.queue_config));
             (void)inserted;
-            auto join_status = pending_it->second->join_player(auth::PlayerProfilePtr(owner));
-            if (!join_status.ok()) {
-                pending_sessions_.erase(session_id);
-                return join_status;
-            }
-            player_pending_sessions_[request.owner.player_id] = session_id;
+            pending_it->second->ensure_empty_timer();
         }
         browsing_players_.erase(request.owner.player_id);
     }
@@ -964,7 +958,6 @@ auto GameHub::start_active_session(std::int64_t session_id) -> util::Status {
                 session_id,
                 players,
                 game_config,
-                pending_session->queue_config().public_session,
                 record_manager_));
         if (auto it = active_sessions_.find(session_id); it != active_sessions_.end() && transport_ != nullptr) {
             it->second->set_session_end_callback(
@@ -1161,8 +1154,19 @@ void GameHub::garbage_collect_pending_sessions() {
 }
 
 void GameHub::broadcast_joinable_sessions() {
-    const auto sessions = list_joinable_sessions();
+    auto all_sessions = list_joinable_sessions();
     const auto active_sessions = list_active_sessions();
+
+    // Only broadcast public sessions to browsing players. Players who join a
+    // non-public session will see it via the game WS path, not via the lobby.
+    std::vector<PendingSessionSummary> sessions;
+    sessions.reserve(all_sessions.size());
+    for (const auto& s : all_sessions) {
+        if (s.public_session) {
+            sessions.push_back(s);
+        }
+    }
+
     Json::Value payload(Json::objectValue);
     payload["sessions"] = SerializePendingSummaryList(sessions);
     payload["active_sessions"] = SerializeActiveSummaryList(active_sessions);

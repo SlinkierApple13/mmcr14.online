@@ -72,6 +72,7 @@ interface CreateQueueValues {
   singleplayer: boolean
   debug_mode: boolean
   unranked: boolean
+  public_session: boolean
 }
 
 interface AuthFormValues {
@@ -203,6 +204,7 @@ function CreateQueueModal({
           singleplayer: false,
           debug_mode: false,
           unranked: false,
+          public_session: true,
         }}
       >
         <Form.Item
@@ -287,6 +289,9 @@ function CreateQueueModal({
           ]}
         >
           <InputNumber min={TOTAL_ROUNDS_MIN} max={TOTAL_ROUNDS_MAX} step={1} precision={0} />
+        </Form.Item>
+        <Form.Item label="等待时公开" name="public_session" valuePropName="checked">
+          <Switch />
         </Form.Item>
         <Form.Item label="保留记录" name="recorded" valuePropName="checked">
           <Switch disabled={singleplayer || debugMode} />
@@ -590,9 +595,9 @@ function LobbyPage() {
             recorded: values.singleplayer || values.debug_mode ? false : values.recorded,
             debug_mode: values.debug_mode,
             unranked: values.unranked,
+            public_session: values.public_session,
           },
           queue_config: {
-            public_session: !values.singleplayer,
             singleplayer: values.singleplayer,
           },
         },

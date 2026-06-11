@@ -31,6 +31,7 @@ struct GameConfig {
     bool recorded{true};
     bool debug_mode{false};
     bool unranked{false};
+    bool public_session{true};
 
     static constexpr int with_margin(int base) {
         return base + network_delay_ms;
