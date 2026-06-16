@@ -233,6 +233,8 @@ export default function GamePage() {
             const sid = snap.session_id
             if (sid) { saveStoredSessionId(sid); setSessionIdHint(sid) }
             sceneRef.current?.flushFromSnapshot(snap)
+            // Restart periodic ping after a successful reconnect
+            sceneRef.current?.restartPeriodicPing()
             // Capture ratings from snapshot (resume path)
             const snapRatings = (env.payload as Record<string, unknown>)?.ratings
             if (Array.isArray(snapRatings)) {
