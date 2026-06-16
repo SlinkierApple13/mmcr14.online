@@ -67,6 +67,25 @@ function readWaitingDiscarderSeat(snapshot: ActiveSessionSnapshot): number | nul
   return null
 }
 
+function readResultSourceSeat(
+  kind: string,
+  state: Record<string, any>,
+  fallbackSeat: number,
+): number {
+  if (kind === 'discard_win' || kind === 'rob_added_kong_win') {
+    if (typeof state.result_source_actor === 'number') {
+      return state.result_source_actor
+    }
+    return fallbackSeat
+  }
+
+  if (typeof state.last_actor === 'number') {
+    return state.last_actor
+  }
+
+  return fallbackSeat
+}
+
 /**
  * The complete PixiJS mahjong scene. Owns all sub-components and
  * exposes methods the React page calls when backend messages arrive.
@@ -1535,8 +1554,6 @@ export class MahjongScene {
           new TempLabel(this.center, actorDir, text, 1000, (alias) => this.playSound(alias))
         }
       }
-      if (kind === 'player_left') this.handlePlayerLeft(actorSeat)
-      if (kind === 'player_resumed') this.handlePlayerResumed(actorSeat)
     }
 
     // ── Phase B: UI update (BOTH categories) ───────────────────────
@@ -1545,9 +1562,18 @@ export class MahjongScene {
       const dir = transDir(ss.seat_index as number, this.selfDir)
       this.names[dir] = displayPlayerName(ss.username)
       this.scores[dir] = ss.score as number ?? 0
-      this.present[dir] = (this.presentationMode === 'replay' && this.replayRecordVersion < 6) ? true : !((ss.afk as boolean) || Boolean(ss.disconnected))
+      const isActorPresenceEvent =
+        (kind === 'player_left' || kind === 'player_resumed') &&
+        (ss.seat_index as number) === actorSeat
+      if (!isActorPresenceEvent) {
+        this.present[dir] = (this.presentationMode === 'replay' && this.replayRecordVersion < 6)
+          ? true
+          : !((ss.afk as boolean) || Boolean(ss.disconnected))
+      }
       this.stateDisplay.setScore(this.names[dir], this.scores[dir], dir, !this.present[dir])
     }
+    if (kind === 'player_left') this.handlePlayerLeft(actorSeat)
+    if (kind === 'player_resumed') this.handlePlayerResumed(actorSeat)
     // Current direction comes directly from backend state.
     const currentPlayer = readCurrentPlayer(state)
     if (currentPlayer !== null) {
@@ -1582,9 +1608,8 @@ export class MahjongScene {
       const win = event.win as Record<string, any>
       const selfDrawn = kind === 'self_drawn_win'
       const winnerName = this.names[transDir(event.actor_seat ?? 0, this.selfDir)] ?? ''
-      // Shooter is the last discarder for discard_win/rob_added_kong_win
-      const shooterIdx = state.last_actor
-      const shooterName = shooterIdx !== null ? (this.names[transDir(shooterIdx as number, this.selfDir)] ?? '') : ''
+      const shooterSeat = readResultSourceSeat(kind, state, this.lastDiscarderSeat)
+      const shooterName = selfDrawn ? '' : (this.names[transDir(shooterSeat, this.selfDir)] ?? '')
       const fan: number = win.win_fan ?? 0
       const fans: string[] = win.win_fans ?? []
       const bp: number = win.win_base_point ?? 0

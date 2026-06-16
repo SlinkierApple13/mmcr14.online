@@ -284,6 +284,7 @@ function applyPlayerAvailability(base: ReplayBaseSnapshot, event: ReplayRecordEv
     seat.disconnected = true
   }
   if (event.kind === 'player_resumed') {
+    seat.afk = false
     seat.disconnected = false
   }
 }
