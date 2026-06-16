@@ -423,11 +423,26 @@ export class MahjongScene {
       this.latencyPingSentAt.delete(identifier)
       ++this.missedPongCount
       if (this.missedPongCount >= 2) {
+        // Stop pinging immediately to prevent a spiral:
+        // during reconnection pings get dropped but their
+        // timeouts still fire, which would trigger another
+        // onConnectionLost → close → reconnect → repeat.
+        this.stopPeriodicPing()
+        this.clearLatencyPingTimeouts()
+        this.missedPongCount = 0
         this.onConnectionLost?.()
       }
     }, 3000)
     this.latencyPingTimeouts.set(identifier, timeoutId)
     this.sendToServer('ping', { identifier })
+  }
+
+    /** Restart the periodic latency-measurement ping.
+   *  Called by GamePage after a successful reconnect so the
+   *  latency indicator recovers without triggering another
+   *  disconnect spiral. */
+  restartPeriodicPing(): void {
+    this.startPeriodicPing()
   }
 
   private handleCountdownLatencyClick = (): void => {
