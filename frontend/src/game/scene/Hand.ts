@@ -367,9 +367,9 @@ export class Hand extends Container {
   ): void {
     const yRight = -TILE_HEIGHT * 0.5 * (this.handScale - 1.0)
     const movementTime = gradualAppear || flush ? 0 : ANIMATION_TIME
-    const rightListDelay = delayRight ? movementTime : 0
-    const drawnTileDelay = delayRight ? movementTime : 0
-    const leftListDelay = delayLeft ? movementTime : 0
+    const rightListDelay = delayRight ? movementTime * 4 : 0
+    const drawnTileDelay = delayRight ? movementTime * 4 : 0
+    const leftListDelay = delayLeft ? movementTime * 4 : 0
 
     if (mergeDraw && this.drawnTile) {
       // push drawnTile to front of the right list (container operation only)
