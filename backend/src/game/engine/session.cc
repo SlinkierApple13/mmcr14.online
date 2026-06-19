@@ -2887,10 +2887,12 @@ int ActiveSession::get_random_pause() {
  * 2. Broadcast all claims and transitions in the basic interval Config::meld_offset_ms
  *    later for "delayed" players, INCLUDING the starting transition but EXCEPT the ending 
  *    transition, whose rules are listed below.
- * 3. If the ending transition is at least Config::meld_offset_ms after the second to last
- *    transition, broadcast it normally. Otherwise, broadcast it immediately for the actor,
- *    but delay it until Config::meld_offset_ms after the second to last transition or
- *    the last claim event (except player left and player resumed), whichever is later,
+ * 3. If the ending transition is at least (Config::meld_offset_ms + 
+ *    Config::minimal_transition_ms) after the second to last
+ *    transition or the last claim event, broadcast it normally. Otherwise, broadcast it 
+ *    immediately for the actor, but delay it until [(Config::meld_offset_ms + 
+ *    Config::minimal_transition_ms) after the second to last transition or the last claim 
+ *    event (except player left and player resumed), whichever is later],
  *    for the other players. Note that since the ending transition also marks the start of
  *    the next basic interval, if that interval triggers the "delayed" players rule, the
  *    broadcast of the ending transition to those players will be further delayed.
