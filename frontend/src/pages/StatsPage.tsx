@@ -38,6 +38,11 @@ const { Header, Content } = Layout
 const { Title, Text } = Typography
 const { RangePicker } = DatePicker
 
+const STATS_WS_PING_INTERVAL_MS = 8000
+const STATS_WS_PONG_TIMEOUT_MS = 5000
+const STATS_WS_RECONNECT_BASE_MS = 1000
+const STATS_WS_RECONNECT_MAX_MS = 8000
+
 // ── Types ──────────────────────────────────────────────────────────
 
 interface StatsPlayer {
@@ -161,6 +166,11 @@ export default function StatsPage() {
   const wsRef = useRef<WebSocket | null>(null)
   const wsReady = useRef(false)
   const pendingMessages = useRef<unknown[]>([])
+  const currentPageRef = useRef(currentPage)
+  const pageSizeRef = useRef(pageSize)
+  const recordSortFieldRef = useRef(recordSortField)
+  const recordSortOrderRef = useRef(recordSortOrder)
+  const showPlayerStatsRef = useRef(showPlayerStats)
   const [filterForm] = Form.useForm()
   const watchedPlayerName: string[] | undefined = Form.useWatch('playerName', filterForm)
   const watchedExcludeSuperior = Form.useWatch('exclude_superior_fans', filterForm)
@@ -170,6 +180,14 @@ export default function StatsPage() {
   useEffect(() => {
     if (playerHasSelection) setShowPlayerStats(true)
   }, [playerHasSelection])
+
+  useEffect(() => {
+    currentPageRef.current = currentPage
+    pageSizeRef.current = pageSize
+    recordSortFieldRef.current = recordSortField
+    recordSortOrderRef.current = recordSortOrder
+    showPlayerStatsRef.current = showPlayerStats
+  }, [currentPage, pageSize, recordSortField, recordSortOrder, showPlayerStats])
 
   // ── Helpers ──────────────────────────────────────────────────────
 
@@ -282,30 +300,92 @@ export default function StatsPage() {
       .then((resp) => setPlayerList(resp.players ?? []))
       .catch(() => {})
 
-    const ws = new WebSocket(buildWebSocketUrl('/ws/stats'))
-    wsRef.current = ws
     let pingTimer: ReturnType<typeof setInterval> | null = null
+    let pongTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectAttempts = 0
+    let disposed = false
 
-    ws.onopen = () => {
-      wsReady.current = true
-      while (pendingMessages.current.length > 0) {
-        ws.send(JSON.stringify(pendingMessages.current.shift()))
+    const clearHeartbeat = () => {
+      if (pingTimer !== null) {
+        clearInterval(pingTimer)
+        pingTimer = null
       }
-      buildAndSendFilter(filterForm.getFieldsValue())
-      pingTimer = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
-      }, 15000)
+      if (pongTimer !== null) {
+        clearTimeout(pongTimer)
+        pongTimer = null
+      }
     }
 
-    ws.onmessage = (event) => {
+    const clearReconnect = () => {
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+    }
+
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer !== null) return
+      wsReady.current = false
+      clearHeartbeat()
+      const delay = Math.min(STATS_WS_RECONNECT_BASE_MS * Math.max(1, reconnectAttempts), STATS_WS_RECONNECT_MAX_MS)
+      reconnectAttempts += 1
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        connect()
+      }, delay)
+    }
+
+    const markPongReceived = () => {
+      if (pongTimer !== null) {
+        clearTimeout(pongTimer)
+        pongTimer = null
+      }
+    }
+
+    const startHeartbeat = (socket: WebSocket) => {
+      clearHeartbeat()
+      pingTimer = setInterval(() => {
+        if (socket.readyState !== WebSocket.OPEN || pongTimer !== null) return
+        socket.send(JSON.stringify({ type: 'ping' }))
+        pongTimer = setTimeout(() => {
+          pongTimer = null
+          if (wsRef.current === socket && socket.readyState !== WebSocket.CLOSED) {
+            socket.close()
+          }
+          scheduleReconnect()
+        }, STATS_WS_PONG_TIMEOUT_MS)
+      }, STATS_WS_PING_INTERVAL_MS)
+    }
+
+    const resyncCurrentView = () => {
+      pendingMessages.current = []
+      buildAndSendFilter(filterForm.getFieldsValue(), {
+        playerStatsOn: showPlayerStatsRef.current,
+        page: currentPageRef.current,
+        pageSize: pageSizeRef.current,
+        sortField: recordSortFieldRef.current,
+        sortOrder: recordSortOrderRef.current,
+      })
+    }
+
+    const handleMessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(event.data) as Record<string, unknown>
 
-        if (msg.type === 'pong') return
+        if (msg.type === 'pong' || msg.type === 'ack') {
+          markPongReceived()
+          return
+        }
 
         let inner = msg
         if (msg.payload && typeof msg.payload === 'object' && msg.payload !== null && 'type' in msg.payload) {
           inner = msg.payload as Record<string, unknown>
+        }
+
+        if (inner.type === 'pong' || inner.type === 'ack') {
+          markPongReceived()
+          return
         }
 
         if (inner.type === 'stats') {
@@ -341,17 +421,48 @@ export default function StatsPage() {
       } catch { /* ignore */ }
     }
 
-    ws.onclose = () => {
-      wsReady.current = false
-      if (pingTimer) clearInterval(pingTimer)
+    const connect = () => {
+      if (disposed) return
+      clearReconnect()
+      clearHeartbeat()
+      const socket = new WebSocket(buildWebSocketUrl('/ws/stats'))
+      wsRef.current = socket
+
+      socket.onopen = () => {
+        if (disposed || wsRef.current !== socket) return
+        wsReady.current = true
+        reconnectAttempts = 0
+        setError(null)
+        startHeartbeat(socket)
+        resyncCurrentView()
+      }
+
+      socket.onmessage = handleMessage
+
+      socket.onclose = () => {
+        if (wsRef.current === socket) {
+          wsRef.current = null
+        }
+        scheduleReconnect()
+      }
+
+      socket.onerror = () => {
+        setLoading(false)
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close()
+        }
+      }
     }
 
-    ws.onerror = () => setLoading(false)
+    connect()
 
     return () => {
+      disposed = true
       wsReady.current = false
-      if (pingTimer) clearInterval(pingTimer)
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close()
+      clearHeartbeat()
+      clearReconnect()
+      const ws = wsRef.current
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) ws.close()
       wsRef.current = null
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
