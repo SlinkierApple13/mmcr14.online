@@ -35,9 +35,12 @@ void SeedContainer::RecordTraffic() {
 }
 
 void SeedContainer::RecordTraffic(std::uint64_t from_value) {
-    const std::uint64_t generated = FastMix(from_value);
+    std::unique_lock<std::mutex> lock(mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return;
+    }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    const std::uint64_t generated = FastMix(from_value);
     if (queue_.size() == capacity_) {
         queue_.pop_front();
     }
