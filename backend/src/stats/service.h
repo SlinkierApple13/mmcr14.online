@@ -199,15 +199,20 @@ public:
     [[nodiscard]] auto ListAllRounds() const -> std::vector<const RoundEntry*>;
     [[nodiscard]] auto ListPlayers() const -> std::vector<RoundPlayer>;
     [[nodiscard]] auto round_count() const -> std::size_t;
+    [[nodiscard]] auto version() const -> std::uint64_t;
 
 private:
+    void rebuild_indexes_locked();
     void rebuild_player_index_locked();
+    void rebuild_time_index_locked();
     [[nodiscard]] auto persist_round_locked(const RoundEntry& entry) -> util::Status;
 
     storage::Database* database_;
     mutable std::recursive_mutex mutex_;
     std::unordered_map<RoundKey, RoundEntry, RoundKeyHash> rounds_;
+    std::vector<const RoundEntry*> rounds_by_time_desc_;
     std::unordered_map<std::int64_t, RoundPlayer> players_;
+    std::uint64_t version_{0};
 };
 
 [[nodiscard]] auto ProjectRoundRecord(const Json::Value& record) -> util::StatusOr<RoundEntry>;

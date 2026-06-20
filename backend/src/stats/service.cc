@@ -6,6 +6,7 @@
 #include <queue>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "storage/migration.h"
@@ -270,6 +271,65 @@ auto IsNonstandardSession(std::string_view session_identifier) -> bool {
 }
 
 }  // namespace
+
+auto TimeRangeBegin(std::vector<const RoundEntry*>::const_iterator begin,
+                    std::vector<const RoundEntry*>::const_iterator end,
+                    std::int64_t time_end) {
+    return std::partition_point(begin, end, [time_end](const RoundEntry* entry) {
+        return entry->timestamp_ms > time_end;
+    });
+}
+
+auto TimeRangeEnd(std::vector<const RoundEntry*>::const_iterator begin,
+                  std::vector<const RoundEntry*>::const_iterator end,
+                  std::int64_t time_start) {
+    return std::partition_point(begin, end, [time_start](const RoundEntry* entry) {
+        return entry->timestamp_ms >= time_start;
+    });
+}
+
+void SortStatsRounds(std::vector<const RoundEntry*>& rounds,
+                     std::string_view sort_field,
+                     std::string_view sort_order) {
+    const bool descending = sort_order != "asc";
+    if (sort_field != "fan") {
+        if (!descending) {
+            std::reverse(rounds.begin(), rounds.end());
+        }
+        return;
+    }
+
+    struct FanBucket {
+        double fan{0.0};
+        std::vector<const RoundEntry*> rounds_time_desc;
+    };
+
+    std::unordered_map<double, std::size_t> bucket_indices;
+    bucket_indices.reserve(rounds.size());
+    std::vector<FanBucket> buckets;
+    buckets.reserve(rounds.size());
+    for (const auto* round : rounds) {
+        const double fan = round == nullptr ? 0.0 : round->fan;
+        auto [index_it, inserted] = bucket_indices.emplace(fan, buckets.size());
+        if (inserted) {
+            buckets.push_back(FanBucket{.fan = fan});
+        }
+        buckets[index_it->second].rounds_time_desc.push_back(round);
+    }
+
+    std::sort(buckets.begin(), buckets.end(), [descending](const FanBucket& left, const FanBucket& right) {
+        return descending ? (left.fan > right.fan) : (left.fan < right.fan);
+    });
+
+    rounds.clear();
+    for (auto& bucket : buckets) {
+        if (descending) {
+            rounds.insert(rounds.end(), bucket.rounds_time_desc.begin(), bucket.rounds_time_desc.end());
+        } else {
+            rounds.insert(rounds.end(), bucket.rounds_time_desc.rbegin(), bucket.rounds_time_desc.rend());
+        }
+    }
+}
 
 auto RoundKeyHash::operator()(const RoundKey& key) const noexcept -> std::size_t {
     const auto first = std::hash<std::string>{}(key.session_identifier);
@@ -901,7 +961,8 @@ auto StatsService::LoadFromDatabase() -> util::Status {
         rounds_[entry.round_key] = std::move(entry);
     }
 
-    rebuild_player_index_locked();
+    rebuild_indexes_locked();
+    ++version_;
     return util::Status::Ok();
 }
 
@@ -933,21 +994,14 @@ auto StatsService::UpsertRoundRecord(const Json::Value& record) -> util::Status 
     }
 
     rounds_[projected.value().round_key] = projected.value();
-    rebuild_player_index_locked();
+    rebuild_indexes_locked();
+    ++version_;
     return util::Status::Ok();
 }
 
 auto StatsService::ListAllRounds() const -> std::vector<const RoundEntry*> {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    std::vector<const RoundEntry*> result;
-    result.reserve(rounds_.size());
-    for (const auto& [_, entry] : rounds_) {
-        result.push_back(&entry);
-    }
-    std::sort(result.begin(), result.end(), [](const RoundEntry* left, const RoundEntry* right) {
-        return left->timestamp_ms > right->timestamp_ms;
-    });
-    return result;
+    return rounds_by_time_desc_;
 }
 
 auto StatsService::ImportRecordsFromDirectory(const std::filesystem::path& records_root) -> util::Status {
@@ -985,42 +1039,10 @@ auto StatsService::Query(const StatsFilter& filter) const -> util::StatusOr<Roun
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     RoundCollection collection(filter.player_id);
 
-    // Build fan_filter_positive bitset for fan_stats index lookup (matching old impl)
-    const bool use_fan_stats_index = !filter.fan_filter_positive.empty();
-    qingque::fan_code positive_bits;
-    for (const int fan_id : filter.fan_filter_positive) {
-        positive_bits.set(static_cast<std::size_t>(fan_id), true);
-    }
-
-    // First pass: build full aggregation for fan_stats indexing (old impl behavior)
-    // We need the fan_stats map keyed to do the index lookup.
-    // Build a temporary full collection to get the index.
-    RoundCollection full_collection(filter.player_id);
-    for (const auto& [_, entry] : rounds_) {
-        full_collection.add_round(&entry);
-    }
-
-    // Choose base rounds per old impl: fan_stats index or all rounds
-    auto base_rounds = use_fan_stats_index
-        ? [&]() -> std::vector<const RoundEntry*> {
-            const auto& source = filter.exclude_superior_fans
-                ? full_collection.fan_stats_no_superior
-                : full_collection.fan_stats;
-            auto it = source.find(positive_bits);
-            if (it == source.end()) {
-                return {};
-            }
-            return it->second.occurrences;
-          }()
-        : [&]() -> std::vector<const RoundEntry*> {
-            std::vector<const RoundEntry*> all;
-            for (const auto& [_, entry] : rounds_) {
-                all.push_back(&entry);
-            }
-            return all;
-          }();
-
-    for (const auto* entry : base_rounds) {
+    const auto begin = TimeRangeBegin(rounds_by_time_desc_.begin(), rounds_by_time_desc_.end(), filter.time_end);
+    const auto end = TimeRangeEnd(begin, rounds_by_time_desc_.end(), filter.time_start);
+    for (auto it = begin; it != end; ++it) {
+        const auto* entry = *it;
         if (filter.matches(*entry)) {
             collection.add_round(entry);
         }
@@ -1036,38 +1058,26 @@ auto StatsService::ListRounds(const StatsFilter& filter,
                               std::size_t limit) const -> util::StatusOr<RoundPage> {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<const RoundEntry*> rounds;
-    rounds.reserve(rounds_.size());
-    for (const auto& [_, entry] : rounds_) {
-        if (filter.matches(entry)) {
-            rounds.push_back(&entry);
+    const auto range_begin = TimeRangeBegin(rounds_by_time_desc_.begin(), rounds_by_time_desc_.end(), filter.time_end);
+    const auto range_end = TimeRangeEnd(range_begin, rounds_by_time_desc_.end(), filter.time_start);
+    rounds.reserve(static_cast<std::size_t>(std::distance(range_begin, range_end)));
+    for (auto it = range_begin; it != range_end; ++it) {
+        const auto* entry = *it;
+        if (filter.matches(*entry)) {
+            rounds.push_back(entry);
         }
     }
 
-    const bool descending = sort_order != "asc";
-    if (sort_field == "fan") {
-        std::sort(rounds.begin(), rounds.end(), [descending](const RoundEntry* left, const RoundEntry* right) {
-            if (left->fan != right->fan) {
-                return descending ? (left->fan > right->fan) : (left->fan < right->fan);
-            }
-            return descending ? (left->timestamp_ms > right->timestamp_ms) : (left->timestamp_ms < right->timestamp_ms);
-        });
-    } else {
-        std::sort(rounds.begin(), rounds.end(), [descending](const RoundEntry* left, const RoundEntry* right) {
-            if (left->timestamp_ms != right->timestamp_ms) {
-                return descending ? (left->timestamp_ms > right->timestamp_ms) : (left->timestamp_ms < right->timestamp_ms);
-            }
-            return descending ? (left->fan > right->fan) : (left->fan < right->fan);
-        });
-    }
+    SortStatsRounds(rounds, sort_field, sort_order);
 
     RoundPage page;
     page.total_count = rounds.size();
     if (offset >= rounds.size()) {
         return page;
     }
-    const auto end = std::min(rounds.size(), offset + limit);
+    const auto page_end = std::min(rounds.size(), offset + limit);
     page.rounds.assign(rounds.begin() + static_cast<std::ptrdiff_t>(offset),
-                       rounds.begin() + static_cast<std::ptrdiff_t>(end));
+                       rounds.begin() + static_cast<std::ptrdiff_t>(page_end));
     return page;
 }
 
@@ -1092,6 +1102,16 @@ auto StatsService::round_count() const -> std::size_t {
     return rounds_.size();
 }
 
+auto StatsService::version() const -> std::uint64_t {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    return version_;
+}
+
+void StatsService::rebuild_indexes_locked() {
+    rebuild_player_index_locked();
+    rebuild_time_index_locked();
+}
+
 void StatsService::rebuild_player_index_locked() {
     players_.clear();
     for (const auto& [_, entry] : rounds_) {
@@ -1102,6 +1122,26 @@ void StatsService::rebuild_player_index_locked() {
             players_[player.player_id] = player;
         }
     }
+}
+
+void StatsService::rebuild_time_index_locked() {
+    rounds_by_time_desc_.clear();
+    rounds_by_time_desc_.reserve(rounds_.size());
+    for (const auto& [_, entry] : rounds_) {
+        rounds_by_time_desc_.push_back(&entry);
+    }
+    std::sort(rounds_by_time_desc_.begin(), rounds_by_time_desc_.end(), [](const RoundEntry* left, const RoundEntry* right) {
+        if (left->timestamp_ms != right->timestamp_ms) {
+            return left->timestamp_ms > right->timestamp_ms;
+        }
+        if (left->fan != right->fan) {
+            return left->fan > right->fan;
+        }
+        if (left->round_key.session_identifier != right->round_key.session_identifier) {
+            return left->round_key.session_identifier > right->round_key.session_identifier;
+        }
+        return left->round_key.round_number > right->round_key.round_number;
+    });
 }
 
 auto StatsService::persist_round_locked(const RoundEntry& entry) -> util::Status {
