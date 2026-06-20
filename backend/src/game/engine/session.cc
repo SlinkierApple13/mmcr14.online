@@ -1017,8 +1017,21 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 
 	auto time_left = [this, &now](int minimum, int minimum_after_last) {
 		int time_left_ms = minimum;
+		// Last timestamp: the later of
+		// 1. the last transition timestamp, or
+		// 2. the most recent Chow/Pung/MeldedKong/DiscardWin/RobAddedKongWin event timestamp except the last 
+		//    (since the current event is already added into event list), if any
+		int64_t last_timestamp_ms = transition_queue_.empty() ? 0 : transition_queue_.back().timestamp_ms;
+		for (auto it = event_queue_.end() - 1; it != event_queue_.begin() - 1; --it) {
+			if (it->kind == EventKind::kChow || it->kind == EventKind::kPung ||
+				it->kind == EventKind::kMeldedKong || it->kind == EventKind::kDiscardWin ||
+				it->kind == EventKind::kRobAddedKongWin) {
+				last_timestamp_ms = std::max(last_timestamp_ms, it->timestamp_ms);
+				break;
+			}
+		}
 		time_left_ms = std::max(time_left_ms, 
-			minimum_after_last - static_cast<int>(now - (transition_queue_.empty() ? now : transition_queue_.back().timestamp_ms)));
+			minimum_after_last - static_cast<int>(now - last_timestamp_ms));
 		for (int i = 0; i < 4; ++i) {
 			auto pending_status = update_pending_status(i, now);
 			if (pending_status == PendingStatus::kPendingPrimary) {

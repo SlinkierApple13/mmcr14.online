@@ -7,7 +7,7 @@ struct GameConfig {
     static constexpr int afk_tolerance_ms{5000};
     static constexpr int dead_time{5000};
     static constexpr int epsilon_ms{10};
-    static constexpr int pass_margin_ms{300};
+    static constexpr int pass_margin_ms{500};
     static constexpr int primary_timer_min_ms{3000};
     static constexpr int primary_timer_max_ms{15000};
     static constexpr int secondary_timer_min_ms{3000};
@@ -18,7 +18,7 @@ struct GameConfig {
     static constexpr int minimal_transition_ms{400};
     static constexpr int network_delay_ms{100};
     static constexpr int meld_offset_ms{1450};
-    static constexpr int meld_pause_ms{750};
+    static constexpr int meld_pause_ms{770};
     static constexpr int random_pause_range{1450};
     static constexpr int round_interval_ms{7500};
     static constexpr double random_pause_prob{0.11};
