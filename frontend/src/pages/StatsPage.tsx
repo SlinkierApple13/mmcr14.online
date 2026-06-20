@@ -256,8 +256,8 @@ export default function StatsPage() {
       if (values.min_fan !== undefined && values.min_fan !== null) filter.min_fan = values.min_fan
       if (values.max_fan !== undefined && values.max_fan !== null) filter.max_fan = values.max_fan
       if (Array.isArray(values.timeRange) && values.timeRange.length === 2) {
-        filter.time_start = (values.timeRange[0] as dayjs.Dayjs).valueOf() * 1000
-        filter.time_end = (values.timeRange[1] as dayjs.Dayjs).valueOf() * 1000
+        filter.time_start = (values.timeRange[0] as dayjs.Dayjs).startOf('day').valueOf()
+        filter.time_end = (values.timeRange[1] as dayjs.Dayjs).endOf('day').valueOf()
       }
       filter.exclude_superior_fans = values.exclude_superior_fans !== undefined ? values.exclude_superior_fans : false
       filter.include_nonstandard = values.include_nonstandard !== undefined ? values.include_nonstandard : true
