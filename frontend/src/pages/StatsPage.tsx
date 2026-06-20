@@ -195,12 +195,25 @@ export default function StatsPage() {
     [recordSortField, recordSortOrder, sendWs],
   )
 
+  type FilterRequestOptions = {
+    playerStatsOn?: boolean
+    page?: number
+    pageSize?: number
+    sortField?: RecordSortField
+    sortOrder?: RecordSortOrder
+  }
+
   const buildAndSendFilter = useCallback(
-    (values: Record<string, unknown>, playerStatsOn?: boolean) => {
+    (values: Record<string, unknown>, options: FilterRequestOptions = {}) => {
       setLoading(true)
       setError(null)
+      setRecordsLoading(true)
       const filter: Record<string, unknown> = {}
-      const usePlayerStats = playerStatsOn !== undefined ? playerStatsOn : showPlayerStats
+      const usePlayerStats = options.playerStatsOn !== undefined ? options.playerStatsOn : showPlayerStats
+      const nextPage = options.page ?? 1
+      const nextPageSize = options.pageSize ?? pageSize
+      const nextSortField = options.sortField ?? recordSortField
+      const nextSortOrder = options.sortOrder ?? recordSortOrder
 
       if (Array.isArray(values.playerName) && values.playerName.length > 0) {
         filter.player_filter_positive = (values.playerName as number[]).map(Number)
@@ -229,11 +242,24 @@ export default function StatsPage() {
         filter.time_end = (values.timeRange[1] as dayjs.Dayjs).valueOf() * 1000
       }
       filter.exclude_superior_fans = values.exclude_superior_fans !== undefined ? values.exclude_superior_fans : false
-      filter.include_nonstandard = values.include_nonstandard !== undefined ? values.include_nonstandard : false
+      filter.include_nonstandard = values.include_nonstandard !== undefined ? values.include_nonstandard : true
 
-      sendWs({ type: 'filter', filter })
+      setCurrentPage(nextPage)
+      setPageSize(nextPageSize)
+      setRecordSortField(nextSortField)
+      setRecordSortOrder(nextSortOrder)
+      setRecordsData([])
+
+      sendWs({
+        type: 'filter',
+        filter,
+        sort_field: nextSortField,
+        sort_order: nextSortOrder,
+        offset: (nextPage - 1) * nextPageSize,
+        limit: nextPageSize,
+      })
     },
-    [sendWs, showPlayerStats],
+    [pageSize, recordSortField, recordSortOrder, sendWs, showPlayerStats],
   )
 
   const handleFilter = useCallback(
@@ -246,8 +272,8 @@ export default function StatsPage() {
     setShowPlayerStats(false)
     setLoading(true)
     setError(null)
-    sendWs({ type: 'overall_stats' })
-  }, [filterForm, sendWs])
+    buildAndSendFilter(filterForm.getFieldsValue(), { playerStatsOn: false })
+  }, [buildAndSendFilter, filterForm])
 
   // ── WebSocket ────────────────────────────────────────────────────
 
@@ -265,7 +291,7 @@ export default function StatsPage() {
       while (pendingMessages.current.length > 0) {
         ws.send(JSON.stringify(pendingMessages.current.shift()))
       }
-      sendWs({ type: 'overall_stats' })
+      buildAndSendFilter(filterForm.getFieldsValue())
       pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
       }, 15000)
@@ -289,16 +315,17 @@ export default function StatsPage() {
           setFanStats((data.fan_stats ?? []) as FanStatItem[])
           setTotalRecords((inner.tot_records as number) ?? 0)
           setLoading(false)
-          setCurrentPage(1)
-          setRecordsData([])
-          requestRecords(1, pageSize)
           return
         }
 
         if (inner.type === 'records') {
           const rawEntries = (inner.round_entries ?? []) as RoundEntryRecordRaw[]
+          const responseOffset = typeof inner.offset === 'number' ? inner.offset : 0
+          const responseLimit = typeof inner.limit === 'number' && inner.limit > 0 ? inner.limit : 16
           setRecordsData(processRoundEntries(rawEntries))
           setTotalRecords((inner.total as number) ?? 0)
+          setPageSize(responseLimit)
+          setCurrentPage(Math.floor(responseOffset / responseLimit) + 1)
           setRecordsLoading(false)
           return
         }
@@ -512,7 +539,13 @@ export default function StatsPage() {
                       <Switch checked={showPlayerStats && playerHasSelection}
                         onChange={(checked) => {
                           setShowPlayerStats(checked)
-                          buildAndSendFilter(filterForm.getFieldsValue(), checked)
+                          buildAndSendFilter(filterForm.getFieldsValue(), {
+                            playerStatsOn: checked,
+                            page: currentPage,
+                            pageSize,
+                            sortField: recordSortField,
+                            sortOrder: recordSortOrder,
+                          })
                         }}
                         disabled={!playerHasSelection} />
                       <Text style={{ color: playerHasSelection ? undefined : '#999' }}>玩家数据</Text>
@@ -544,7 +577,12 @@ export default function StatsPage() {
           <Card className="stats-page__card">
             <div style={{ textAlign: 'center' }}>
               <Text type="danger">{error}</Text>
-              <Button size="small" onClick={() => sendWs({ type: 'overall_stats' })} style={{ marginLeft: 8 }}>重试</Button>
+              <Button size="small" onClick={() => buildAndSendFilter(filterForm.getFieldsValue(), {
+                page: currentPage,
+                pageSize,
+                sortField: recordSortField,
+                sortOrder: recordSortOrder,
+              })} style={{ marginLeft: 8 }}>重试</Button>
             </div>
           </Card>
         ) : null}
