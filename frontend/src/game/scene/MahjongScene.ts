@@ -327,9 +327,8 @@ export class MahjongScene {
     e.preventDefault()
     if (!this.inputEnabled || !this.canAct() || this.currentStageCounter <= 0) return
 
-    this.clearMeldChoices()
-
     if (this.hands?.[0]?.drawnTile && this.hasAction('discard_tile')) {
+      this.clearMeldChoices()
       const dt = this.hands[0].drawnTile
       this.hands[0].unwaitDiscard()
       this.countdown.stop()
@@ -349,6 +348,7 @@ export class MahjongScene {
     }
 
     if (this.hasAction('final_pass')) {
+      this.clearMeldChoices()
       this.hands[0].unwaitDiscard()
       this.countdown.stop()
       this.sendGameInput({ kind: 'final_pass' })
@@ -1911,7 +1911,7 @@ export class MahjongScene {
         this.hands[0].unwaitDiscard()
         if (action.kind === 'pass') {
           this.requestPassAction()
-          return true
+          return false
         }
         this.sendGameInput({
           kind: action.kind,
