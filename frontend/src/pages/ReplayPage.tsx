@@ -366,7 +366,7 @@ export default function ReplayPage() {
     setTimeline(nextTimeline)
     setCurrentIndex(defaultIndex)
     currentIndexRef.current = defaultIndex
-  }, [activeRoundRecord, sessionPayload])
+  }, [activeRoundRecord])
 
   useEffect(() => {
     if (!sceneReady || timeline.length === 0) {
@@ -472,14 +472,13 @@ export default function ReplayPage() {
     return () => document.removeEventListener('wheel', handler)
   }, [sceneReady, timeline])
 
-  // ── Poll for new rounds if watching latest round live ─────────────
+  // ── Poll for new rounds ─────────────
   const POLL_WINDOW_MS = 20 * 60 * 1000
   const lastTransition = activeRoundRecord?.transition_queue?.[activeRoundRecord.transition_queue.length - 1]
   const hasEnd = lastTransition?.kind === 'end'
-  const isLatestRound = selectedRoundNumber === roundCount
   const lastTs = lastTransition?.timestamp_ms ?? 0
   const withinWindow = lastTs > 0 && (Date.now() - lastTs < POLL_WINDOW_MS)
-  const shouldPoll = isLatestRound && !hasEnd && withinWindow
+  const shouldPoll = !hasEnd && withinWindow
 
   useEffect(() => {
     if (!shouldPoll || !sessionIdentifier) {
@@ -488,10 +487,15 @@ export default function ReplayPage() {
     }
     const poll = () => {
       pollTimeoutRef.current = null
-      apiRequest<ReplaySessionPayload>(`/replay/${encodeURIComponent(sessionIdentifier)}/rounds-after?round=${selectedRoundNumber}`)
+      apiRequest<ReplaySessionPayload>(`/replay/${encodeURIComponent(sessionIdentifier)}/rounds-after?round=${roundCount}`)
         .then(payload => {
           if (payload.round_records && payload.round_records.length > 0) {
-            setSessionPayload(prev => prev ? { ...prev, round_records: [...(prev.round_records ?? []), ...payload.round_records!], round_count: payload.round_count ?? (prev.round_count ?? 0) } : payload)
+            setSessionPayload(prev => {
+              if (!prev) return payload
+              const newRecords = [...(prev.round_records ?? []), ...payload.round_records!]
+              const newCount = payload.round_count ?? (prev.round_count ?? 0)
+              return { ...prev, round_records: newRecords, round_count: newCount }
+            })
           }
         })
         .catch(() => {})
@@ -501,7 +505,7 @@ export default function ReplayPage() {
     }
     pollTimeoutRef.current = setTimeout(poll, 10000)
     return () => { if (pollTimeoutRef.current) { clearTimeout(pollTimeoutRef.current); pollTimeoutRef.current = null } }
-  }, [shouldPoll, sessionIdentifier, selectedRoundNumber])
+  }, [shouldPoll, sessionIdentifier, roundCount])
 
   // ── URL sync for round & perspective ──────────────────────────────
   useEffect(() => {

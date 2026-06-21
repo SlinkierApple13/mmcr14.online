@@ -114,7 +114,6 @@ export default function GamePage() {
     setSceneReady(false)
     scene.mount(stageRef.current).then((mounted) => {
       if (cancelled || !mounted) return
-      setSceneReady(true)
       scene.setVolume(loadStoredVolume())
       scene.setOnConnectionLost(() => {
         const s = socketRef.current
@@ -133,6 +132,7 @@ export default function GamePage() {
         audio.load()
         scene.loadSound(alias, audio)
       }
+      setSceneReady(true)
     })
     return () => {
       cancelled = true
@@ -171,12 +171,6 @@ export default function GamePage() {
 
     const connect = () => {
       if (disposedRef.current) return
-
-      authoritativeActiveRef.current = false
-      lastScRef.current = -1
-      gameEndedRef.current = false
-      setPendingSnapshot(null)
-      setPhase('loading')
 
       const url = buildWebSocketUrl('/ws/game', token, sessionIdHint ? { session_id: sessionIdHint } : {})
       const socket = new WebSocket(url)
@@ -384,6 +378,7 @@ export default function GamePage() {
       socket.onclose = () => {
         if (socketRef.current === socket) socketRef.current = null
         if (disposedRef.current || intentionalClose || gameEndedRef.current) return
+        setPhase('loading')
         notify('连接已断开，正在重连……')
         let retries = 0
         const tryReconnect = () => {
@@ -492,7 +487,11 @@ export default function GamePage() {
         <section className="game-page__board-panel">
           <div className="game-page__stage-shell" style={{ background: sceneAppearance.backgroundColorTable }}>
             <div ref={stageRef} className="game-stage" />
-            {phase === 'loading' && <div className="replay-stage-overlay">连接牌桌中…</div>}
+            {phase === 'loading' && (
+              <div className="replay-stage-overlay">
+                {sceneReady ? '连接牌桌中…' : '正在加载中…'}
+              </div>
+            )}
           </div>
         </section>
         <aside className="game-page__sidebar">

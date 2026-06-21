@@ -631,21 +631,8 @@ function LobbyPage() {
       return
     }
 
-    try {
-      await apiRequest(`/lobby/sessions/${sessionId}/join`, {
-        method: 'POST',
-        token,
-      })
-      saveStoredSessionId(sessionId)
-      navigate(`/game?gameId=${sessionId}`)
-    } catch (error) {
-      notification.error({
-        message: '加入失败',
-        description: describeError(error, '加入牌桌失败，请重试'),
-        placement: 'topRight',
-        duration: 5,
-      })
-    }
+    saveStoredSessionId(sessionId)
+    navigate(`/game?gameId=${sessionId}`)
   }
 
   const userMenuItems = useMemo(
