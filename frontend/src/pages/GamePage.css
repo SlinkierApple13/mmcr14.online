@@ -390,7 +390,7 @@
   padding: 12px 28px;
   border-radius: 8px;
   font-size: 16px;
-  z-index: 20;
+  z-index: 300;
   pointer-events: none;
 }
 
