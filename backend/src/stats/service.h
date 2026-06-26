@@ -167,7 +167,7 @@ struct StatsFilter {
     std::vector<mahjong::win_t> win_type_filter_negative;
     std::optional<bool> self_drawn;
     bool exclude_superior_fans{true};
-    bool include_nonstandard{false};
+    bool nonstandard_only{false};
     std::int64_t time_start{0};
     std::int64_t time_end{std::numeric_limits<std::int64_t>::max()};
     double min_fan{0.0};

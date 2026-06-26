@@ -174,7 +174,7 @@ export default function StatsPage() {
   const [filterForm] = Form.useForm()
   const watchedPlayerName: string[] | undefined = Form.useWatch('playerName', filterForm)
   const watchedExcludeSuperior = Form.useWatch('exclude_superior_fans', filterForm)
-  const watchedIncludeNonstandard = Form.useWatch('include_nonstandard', filterForm)
+  const watchedNonstandardOnly = Form.useWatch('nonstandard_only', filterForm)
   const playerHasSelection = Array.isArray(watchedPlayerName) && watchedPlayerName.length >= 1
 
   useEffect(() => {
@@ -260,7 +260,7 @@ export default function StatsPage() {
         filter.time_end = (values.timeRange[1] as dayjs.Dayjs).endOf('day').valueOf()
       }
       filter.exclude_superior_fans = values.exclude_superior_fans !== undefined ? values.exclude_superior_fans : false
-      filter.include_nonstandard = values.include_nonstandard !== undefined ? values.include_nonstandard : true
+      filter.nonstandard_only = values.nonstandard_only !== undefined ? values.nonstandard_only : false
 
       setCurrentPage(nextPage)
       setPageSize(nextPageSize)
@@ -642,8 +642,8 @@ export default function StatsPage() {
                       <Text>排除上位番种</Text>
                     </Space>
                     <Space>
-                      <Switch checked={!!watchedIncludeNonstandard}
-                        onChange={(checked) => filterForm.setFieldsValue({ include_nonstandard: checked })} />
+                      <Switch checked={!!watchedNonstandardOnly}
+                        onChange={(checked) => filterForm.setFieldsValue({ nonstandard_only: checked })} />
                       <Text>休闲模式</Text>
                     </Space>
                     <Space>
@@ -664,7 +664,7 @@ export default function StatsPage() {
                   </Space>
                 </Form.Item>
                 <Form.Item name="exclude_superior_fans" hidden initialValue={false}><Switch /></Form.Item>
-                <Form.Item name="include_nonstandard" hidden initialValue={true}><Switch /></Form.Item>
+                <Form.Item name="nonstandard_only" hidden initialValue={false}><Switch /></Form.Item>
               </Col>
               <Col xs={16} sm={10} md={7}>
                 <Form.Item label=" ">
