@@ -792,7 +792,8 @@ auto StatsFilter::matches(const RoundEntry& entry) const -> bool {
     if (player_id.has_value() && !entry.has_player(*player_id)) {
         return false;
     }
-    if (!include_nonstandard && IsNonstandardSession(entry.round_key.session_identifier)) {
+    const bool is_nonstandard = IsNonstandardSession(entry.round_key.session_identifier);
+    if (nonstandard_only != is_nonstandard) {
         return false;
     }
     if (entry.timestamp_ms < time_start || entry.timestamp_ms > time_end) {

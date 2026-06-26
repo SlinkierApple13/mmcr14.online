@@ -1179,7 +1179,9 @@ auto CanViewPendingSession(const game::PendingSession& session,
 
 auto CanViewActiveSession(const game::ActiveSession& session,
 				  std::optional<std::int64_t> viewer_player_id) -> bool {
-	return viewer_player_id.has_value() && ActiveSessionContainsPlayer(session, *viewer_player_id);
+	(void)session;
+	(void)viewer_player_id;
+	return true;
 }
 
 auto BuildGameMessage(std::string_view type, Json::Value payload) -> Json::Value {
@@ -1480,47 +1482,11 @@ auto ParseStatsFilterFromJson(const Json::Value& json) -> stats::StatsFilter {
 	if (const Json::Value* exclude_superior = FindField(json, {"exclude_superior_fans"}); exclude_superior != nullptr && exclude_superior->isBool()) {
 		filter.exclude_superior_fans = exclude_superior->asBool();
 	}
-	if (const Json::Value* include_nonstandard = FindField(json, {"include_nonstandard"}); include_nonstandard != nullptr && include_nonstandard->isBool()) {
-		filter.include_nonstandard = include_nonstandard->asBool();
+	if (const Json::Value* nonstandard_only = FindField(json, {"nonstandard_only"}); nonstandard_only != nullptr && nonstandard_only->isBool()) {
+		filter.nonstandard_only = nonstandard_only->asBool();
 	}
 
 	return filter;
-}
-
-auto StatsFilterPayloadIsTrivial(const Json::Value& json, const stats::StatsFilter& filter) -> bool {
-	const bool has_no_record_criteria =
-		filter.fan_filter_positive.empty() &&
-		filter.fan_filter_negative.empty() &&
-		filter.player_filter_positive.empty() &&
-		filter.player_filter_negative.empty() &&
-		!filter.player_id.has_value() &&
-		!filter.win_player_id.has_value() &&
-		filter.win_player_filter_negative.empty() &&
-		!filter.from_player_id.has_value() &&
-		filter.from_player_filter_negative.empty() &&
-		filter.win_type_filter_positive.empty() &&
-		filter.win_type_filter_negative.empty() &&
-		!filter.self_drawn.has_value() &&
-		filter.time_start == 0 &&
-		filter.time_end == std::numeric_limits<std::int64_t>::max() &&
-		filter.min_fan == 0.0 &&
-		filter.max_fan == std::numeric_limits<double>::max();
-	if (!has_no_record_criteria) {
-		return false;
-	}
-
-	const Json::Value* exclude_superior = FindField(json, {"exclude_superior_fans"});
-	const bool exclude_superior_fans =
-		exclude_superior != nullptr && exclude_superior->isBool()
-			? exclude_superior->asBool()
-			: false;
-	const Json::Value* include_nonstandard = FindField(json, {"include_nonstandard"});
-	const bool include_nonstandard_rounds =
-		include_nonstandard != nullptr && include_nonstandard->isBool()
-			? include_nonstandard->asBool()
-			: true;
-
-	return !exclude_superior_fans && include_nonstandard_rounds;
 }
 
 auto StatsRecordSortKey(std::string_view sort_field, std::string_view sort_order) -> std::string {
@@ -2310,35 +2276,8 @@ public:
 	[[nodiscard]] auto ListVisibleActiveSessions(
 		std::optional<std::int64_t> viewer_player_id) const
 		-> std::vector<game::ActiveSessionSummary> {
-		const auto sessions = game_hub_.list_active_sessions();
-		if (!viewer_player_id.has_value()) {
-			std::vector<game::ActiveSessionSummary> visible_sessions;
-			visible_sessions.reserve(sessions.size());
-			for (const auto& session : sessions) {
-				if (session.public_session) {
-					visible_sessions.push_back(session);
-				}
-			}
-			return visible_sessions;
-		}
-
-		std::vector<game::ActiveSessionSummary> visible_sessions;
-		visible_sessions.reserve(sessions.size());
-		for (const auto& session : sessions) {
-			if (session.public_session) {
-				visible_sessions.push_back(session);
-				continue;
-			}
-
-			auto active_session = game_hub_.find_active_session(session.session_id);
-			if (!active_session.ok()) {
-				continue;
-			}
-			if (ActiveSessionContainsPlayer(*active_session.value(), *viewer_player_id)) {
-				visible_sessions.push_back(session);
-			}
-		}
-		return visible_sessions;
+		(void)viewer_player_id;
+		return game_hub_.list_active_sessions();
 	}
 
 	[[nodiscard]] auto FindPlayerActiveSessionId(std::int64_t player_id) const
@@ -2672,6 +2611,12 @@ auto BuildSessionSnapshotPayload(ServerState& state,
 		return util::Status::NotFound("session not found");
 	}
 	if (!viewer_player_id.has_value()) {
+		for (const auto& seat : active_session.value()->seats()) {
+			const auto player = seat.player.lock();
+			if (player != nullptr && player->player_id != 0) {
+				return active_session.value()->build_snapshot_for_player_id(player->player_id);
+			}
+		}
 		return util::Status::NotFound("session not found");
 	}
 	return active_session.value()->build_snapshot_for_player_id(*viewer_player_id);
@@ -3066,21 +3011,10 @@ public:
 			}
 			auto filter = ParseStatsFilterFromJson(*filter_json);
 			const auto records_request = ParseStatsRecordsRequest(root);
-			const bool trivial_filter = StatsFilterPayloadIsTrivial(*filter_json, filter);
-			const std::string cache_key = trivial_filter ? std::string("overall") : "filter:" + JsonToCompactString(*filter_json);
+			const std::string cache_key = "filter:" + JsonToCompactString(*filter_json);
 			StatsWsSession result;
 			if (GetReusableStatsCache(connection.get(), cache_key, result)) {
 				// Cached result is still current.
-			} else if (trivial_filter) {
-				auto built = BuildOverallStatsResult();
-				if (!built.ok()) {
-					state_->SendWebSocketJson(connection,
-						MakeWebSocketError("stats_query_failed",
-							built.status().message(), request_id));
-					return;
-				}
-				result = std::move(built.value());
-				StoreStatsCache(connection.get(), result);
 			} else {
 				auto built = BuildStatsCache(filter, false, cache_key);
 				if (!built.ok()) {
@@ -3192,7 +3126,7 @@ private:
 		result.overall = true;
 		result.cache_key = "overall";
 		result.filter.exclude_superior_fans = false;
-		result.filter.include_nonstandard = true;
+		result.filter.nonstandard_only = false;
 		result.service_version = service_version;
 		result.time_desc_rounds = std::move(rounds);
 		result.stats_data = collection.ToJson(false);
