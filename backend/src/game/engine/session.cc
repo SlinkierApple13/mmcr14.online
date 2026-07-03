@@ -16,14 +16,24 @@
 namespace mmcr::game {
 namespace {
 
-auto now_ms() -> std::int64_t {
-	return std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::system_clock::now().time_since_epoch()).count();
+auto now_ns() -> std::uint64_t {
+	static uint64_t offset = 0;
+	static bool initialized = false;
+	
+	if (!initialized) {
+		offset = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::system_clock::now().time_since_epoch()).count()) -
+			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
+		initialized = true;
+	}
+
+	return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count() + offset);
 }
 
-auto now_ns() -> std::uint64_t {
-	return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-		std::chrono::system_clock::now().time_since_epoch()).count());
+auto now_ms() -> std::int64_t {
+	return static_cast<std::int64_t>(now_ns() / 1000000);
 }
 
 // Returns a set of initial tiles for debug mode.
@@ -2501,6 +2511,7 @@ auto SerializeVisibleEvent(const Event& event,
 auto MsgOnClaim(const Event& event,
 			 const std::array<Seat, 4>& seats,
 			 const std::array<bool, 4>& interval_delayed_seats,
+			 int meld_offset_ms,
 			 std::int64_t dispatch_now_ms) -> std::array<MsgPolicy, 4> {
 	std::array<MsgPolicy, 4> policies{};
 	const bool apply_interval_delay =
@@ -2509,7 +2520,7 @@ auto MsgOnClaim(const Event& event,
 	for (int seat = 0; seat < 4; ++seat) {
 		std::int64_t deliver_at_ms = dispatch_now_ms;
 		if (apply_interval_delay && interval_delayed_seats[seat]) {
-			deliver_at_ms += GameConfig::meld_offset_ms;
+			deliver_at_ms += meld_offset_ms;
 		}
 		policies[seat].delay_ms = std::max<int>(
 			0,
@@ -2545,26 +2556,27 @@ auto MsgOnTransition(const Event& transition,
 			      const std::array<bool, 4>& interval_delayed_seats,
 			      const std::array<bool, 4>& next_interval_delayed_seats,
 			      const std::optional<Event>& previous_transition,
-			      std::int64_t last_claim_delivery_ms,
+			      int current_meld_offset_ms,
+			      int next_meld_offset_ms,
+			      std::int64_t last_claim_event_ms,
 			      std::int64_t dispatch_now_ms,
 			      int random_pause_ms) -> std::array<MsgPolicy, 4> {
 	std::array<MsgPolicy, 4> policies{};
+	const std::int64_t previous_transition_ms =
+		previous_transition.has_value() ? previous_transition->timestamp_ms : 0;
+	const std::int64_t last_interval_event_ms =
+		std::max(previous_transition_ms, last_claim_event_ms);
 
 	for (int seat = 0; seat < 4; ++seat) {
 		std::int64_t deliver_at_ms = dispatch_now_ms;
 		if (IsSyncCheckpoint(transition.kind)) {
 			if (seat != transition.actor_seat && interval_delayed_seats[seat]) {
-				if (previous_transition.has_value()) {
-					deliver_at_ms = std::max<std::int64_t>(
-						deliver_at_ms,
-						previous_transition->timestamp_ms + GameConfig::meld_offset_ms + GameConfig::minimal_transition_ms);
-				}
 				deliver_at_ms = std::max<std::int64_t>(
 					deliver_at_ms,
-					last_claim_delivery_ms + GameConfig::minimal_transition_ms);
+					last_interval_event_ms + current_meld_offset_ms + GameConfig::minimal_transition_ms);
 			}
 			if (next_interval_delayed_seats[seat] && seat != transition.actor_seat) {
-				deliver_at_ms += GameConfig::meld_offset_ms;
+				deliver_at_ms += next_meld_offset_ms;
 			}
 			if (seat != transition.actor_seat &&
 				(transition.kind == EventKind::kDiscardTile ||
@@ -2574,7 +2586,7 @@ auto MsgOnTransition(const Event& transition,
 		} else if (transition.kind != EventKind::kEnd &&
 			       transition.kind != EventKind::kStart &&
 			       interval_delayed_seats[seat]) {
-			deliver_at_ms += GameConfig::meld_offset_ms;
+			deliver_at_ms += current_meld_offset_ms;
 		}
 
 		policies[seat].delay_ms = std::max<int>(
@@ -2897,22 +2909,26 @@ int ActiveSession::get_random_pause() {
  * 1. After the start transition, check which players have meld options.
  *    If no players or all players have meld options, do nothing special.
  *    Otherwise, mark those without meld options as "delayed."
- * 2. Broadcast all claims and transitions in the basic interval Config::meld_offset_ms
+ *    At the start transition, set a variable meld_offset_ms_ = Config::meld_offset_ms.
+ * 2. Broadcast all claims and transitions in the basic interval meld_offset_ms_
  *    later for "delayed" players, INCLUDING the starting transition but EXCEPT the ending 
  *    transition, whose rules are listed below.
- * 3. If the ending transition is at least (Config::meld_offset_ms + 
- *    Config::minimal_transition_ms) after the second to last
- *    transition or the last claim event, broadcast it normally. Otherwise, broadcast it 
- *    immediately for the actor, but delay it until [(Config::meld_offset_ms + 
+ * 3. If a player draws a tile during the basic interval, let T_last = [time of 
+ *    the second to last transition or the last claim event (except player left 
+ *    and player resumed), whichever is later]. Set new_offset = max(T_last + Config::
+ *    minimal_transition_ms + meld_offset_ms_ - now_ms(), 0) before broadcasting. 
+ * 4. Let T_crit = [(meld_offset_ms_ + 
  *    Config::minimal_transition_ms) after the second to last transition or the last claim 
- *    event (except player left and player resumed), whichever is later],
- *    for the other players. Note that since the ending transition also marks the start of
+ *    event (except player left and player resumed), whichever is later].
+ *    If the ending transition is later than T_crit, broadcast it normally. Otherwise, still
+ *    broadcast it at T_crit for the other players. 
+ *    Note that since the ending transition also marks the start of
  *    the next basic interval, if that interval triggers the "delayed" players rule, the
  *    broadcast of the ending transition to those players will be further delayed.
- * 4. On top of the above rules, an extra delay of a random duration between 0 and 
+ * 5. On top of the above rules, an extra delay of a random duration between 0 and 
  *    Config::random_pause_range is applied with probability Config::random_pause_prob
  *    to all players except the actor on discard tile or added kong transitions.
- * 5. Only start the wait window (start_primary_wait() or start_secondary_wait()) for a 
+ * 6. Only start the wait window (start_primary_wait() or start_secondary_wait()) for a 
  *    player when the claim or transition is broadcasted to THAT player. Do not start any 
  *    waits for players without meld options. Set the state transition timer accordingly.
  */
@@ -2943,7 +2959,7 @@ void ActiveSession::broadcast_claim(const Event& event) {
 	}
 
 	const std::int64_t dispatch_now_ms = now_ms();
-	auto policies = MsgOnClaim(event, seats_, interval_delayed_seats_, dispatch_now_ms);
+	auto policies = MsgOnClaim(event, seats_, interval_delayed_seats_, meld_offset_ms_, dispatch_now_ms);
 	const bool track_claim_delivery =
 		event.kind != EventKind::kPlayerLeft && event.kind != EventKind::kPlayerResumed;
 	for (int seat = 0; seat < 4; ++seat) {
@@ -2957,11 +2973,10 @@ void ActiveSession::broadcast_claim(const Event& event) {
 			policies[seat].delay_ms,
 			state_.stage_counter);
 		policies[seat].msg = build_event_message_for_player(seat, event, "claim");
-		const int actual_delay_ms =
-			send_message(seat, policies[seat].msg, policies[seat].delay_ms);
+		(void)send_message(seat, policies[seat].msg, policies[seat].delay_ms);
 		if (track_claim_delivery) {
-			last_claim_delivery_ms_ =
-				std::max(last_claim_delivery_ms_, dispatch_now_ms + actual_delay_ms);
+			last_protection_claim_event_ms_ =
+				std::max(last_protection_claim_event_ms_, event.timestamp_ms > 0 ? event.timestamp_ms : dispatch_now_ms);
 		}
 	}
 }
@@ -3007,13 +3022,25 @@ void ActiveSession::process_transition(const Event& transition) {
 			: 0;
 
 	const std::int64_t dispatch_now_ms = now_ms();
+	if (transition.kind == EventKind::kDrawTile) {
+		const int previous_meld_offset_ms = meld_offset_ms_;
+		const std::int64_t previous_transition_ms =
+			previous_transition.has_value() ? previous_transition->timestamp_ms : 0;
+		const std::int64_t last_interval_event_ms =
+			std::max(previous_transition_ms, last_protection_claim_event_ms_);
+		meld_offset_ms_ = static_cast<int>(std::max<std::int64_t>(
+			0,
+			last_interval_event_ms + GameConfig::minimal_transition_ms + previous_meld_offset_ms - dispatch_now_ms));
+	}
 	auto policies = MsgOnTransition(
 		transition,
 		seats_,
 		interval_delayed_seats_,
 		next_interval_delayed_seats,
 		previous_transition,
-		last_claim_delivery_ms_,
+		meld_offset_ms_,
+		GameConfig::meld_offset_ms,
+		last_protection_claim_event_ms_,
 		dispatch_now_ms,
 		random_pause_ms);
 
@@ -3043,8 +3070,12 @@ void ActiveSession::process_transition(const Event& transition) {
 	transition_queue_.push_back(transition);
 	if (IsSyncCheckpoint(transition.kind)) {
 		interval_delayed_seats_ = next_interval_delayed_seats;
+		meld_offset_ms_ = GameConfig::meld_offset_ms;
+		last_protection_claim_event_ms_ = 0;
 	} else if (transition.kind == EventKind::kStart || transition.kind == EventKind::kEnd) {
 		interval_delayed_seats_.fill(false);
+		meld_offset_ms_ = GameConfig::meld_offset_ms;
+		last_protection_claim_event_ms_ = 0;
 	}
 
 	int fallback_delay_ms = 0;

@@ -319,11 +319,10 @@ private:
     std::vector<Event> transition_queue_;
     std::vector<Event> event_queue_;
     State state_;
-    Timer transition_timer_;
-    std::array<Timer, 4> pending_start_timers_{};
     std::array<std::optional<PendingStatus>, 4> scheduled_pending_{};
     std::array<bool, 4> interval_delayed_seats_{};
-    std::int64_t last_claim_delivery_ms_{0};
+    int meld_offset_ms_{GameConfig::meld_offset_ms};
+    std::int64_t last_protection_claim_event_ms_{0};
     std::int64_t next_transition_not_before_ms_{0};
     random::SeedContainer* seed_container_{nullptr};
     GameHub* hub_{nullptr};
@@ -347,6 +346,8 @@ private:
     bool current_round_saved_{true};
     std::vector<PlayerRatingSnapshot> current_round_ratings_;
 	std::vector<PlayerRatingSnapshot> final_round_ratings_;
+    Timer transition_timer_;
+    std::array<Timer, 4> pending_start_timers_{};
 
     [[nodiscard]] auto handle_event(const Event& event) -> util::Status;
 

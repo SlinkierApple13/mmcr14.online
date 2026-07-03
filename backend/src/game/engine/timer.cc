@@ -112,7 +112,6 @@ void Timer::worker() {
                 callback();
             }
             lock.lock();
-            break;
         }
     }
 }

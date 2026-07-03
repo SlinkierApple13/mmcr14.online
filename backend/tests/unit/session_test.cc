@@ -39,7 +39,7 @@ struct SessionHarness {
 				  auth::PlayerProfilePtr(players[1]),
 				  auth::PlayerProfilePtr(players[2]),
 				  auth::PlayerProfilePtr(players[3])},
-		  session(&seed, nullptr, 77, player_ptrs, std::move(config), true, record_manager) {
+		  session(&seed, nullptr, 77, player_ptrs, std::move(config), record_manager) {
 		stop_timers();
 	}
 
@@ -162,16 +162,17 @@ TEST(ActiveSessionTest, RejectsWrongSeatAndStaleDiscardMessages) {
 	const mahjong::tile_t drawn_tile = harness.session.seats_[actor_seat].drawn_tile;
 	const std::uint64_t stage_counter = harness.session.state_.stage_counter;
 	const Json::Value message = BuildDiscardInput(drawn_tile, stage_counter);
+	const int wrong_seat_index = (actor_seat + 1) % 4;
 
 	auto wrong_seat = harness.session.handle_message(
-		harness.players[(actor_seat + 1) % 4]->player_id,
+		harness.session.seats_[wrong_seat_index].player.player_id(),
 		message);
 	EXPECT_FALSE(wrong_seat.ok());
 	EXPECT_EQ(wrong_seat.code(), util::StatusCode::kInvalidArgument);
 
 	auto stale_message = BuildDiscardInput(drawn_tile, stage_counter - 1);
 	auto stale = harness.session.handle_message(
-		harness.players[actor_seat]->player_id,
+		harness.session.seats_[actor_seat].player.player_id(),
 		stale_message);
 	EXPECT_FALSE(stale.ok());
 	EXPECT_EQ(stale.code(), util::StatusCode::kInvalidArgument);
@@ -183,7 +184,7 @@ TEST(ActiveSessionTest, SnapshotReportsRemainingDecisionTimer) {
 	StepToFirstDiscard(harness);
 
 	const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count();
+		std::chrono::system_clock::now().time_since_epoch()).count();
 	harness.session.seats_[0].pending = PendingStatus::kPendingPrimary;
 	harness.session.seats_[0].pending_from_ms = now - 1500;
 	harness.session.seats_[0].auxiliary_ms = 2500;
@@ -241,6 +242,33 @@ TEST(ActiveSessionTest, DelayedDiscardExtendsTransitionTimerUntilDelayedBroadcas
 	const auto remaining_ms = harness.session.transition_timer_.remainingMs();
 	const auto minimum_expected_ms = static_cast<std::uint64_t>(GameConfig::meld_offset_ms - 150);
 	EXPECT_GE(remaining_ms, minimum_expected_ms);
+	harness.stop_timers();
+}
+
+TEST(ActiveSessionTest, DrawDuringProtectedIntervalPreservesDelayedOrder) {
+	SessionHarness harness;
+	harness.session.state_.stage_counter = 22;
+	harness.session.interval_delayed_seats_[1] = true;
+
+	const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch()).count();
+	harness.session.transition_queue_.push_back(Event{
+		.kind = EventKind::kDiscardTile,
+		.actor_seat = 3,
+		.tile = 0b01000001,
+		.timestamp_ms = now - 300,
+	});
+	harness.session.last_protection_claim_event_ms_ = now - 100;
+
+	harness.session.process_transition(Event{
+		.kind = EventKind::kDrawTile,
+		.actor_seat = 0,
+		.tile = 0b01000010,
+		.timestamp_ms = now,
+	});
+
+	EXPECT_GE(harness.session.meld_offset_ms_,
+			  GameConfig::meld_offset_ms + GameConfig::minimal_transition_ms - 150);
 	harness.stop_timers();
 }
 
@@ -371,7 +399,7 @@ TEST(ActiveSessionTest, EndSessionWritesAbortRecordWhenRecorded) {
 	Json::Value parsed;
 	std::string errors;
 	ASSERT_TRUE(Json::parseFromStream(builder, stream, &parsed, &errors)) << errors;
-	EXPECT_EQ(parsed["version"].asInt(), 2);
+	EXPECT_EQ(parsed["version"].asInt(), 6);
 	EXPECT_EQ(parsed["header"]["session_identifier"].asString(), session_identifier);
 	EXPECT_EQ(parsed["header"]["round_number"].asUInt64(), 1);
 	EXPECT_TRUE(parsed["round_start_snapshot"].isObject());
@@ -471,7 +499,7 @@ TEST(ActiveSessionTest, FinalReplayRecordIncludesEndTransitionAndScores) {
 	Json::Value parsed;
 	std::string errors;
 	ASSERT_TRUE(Json::parseFromStream(builder, stream, &parsed, &errors)) << errors;
-	EXPECT_EQ(parsed["version"].asInt(), 2);
+	EXPECT_EQ(parsed["version"].asInt(), 6);
 	ASSERT_TRUE(parsed["round_result"].isObject());
 	EXPECT_FALSE(parsed["round_result"]["completed"].asBool());
 	EXPECT_EQ(parsed["round_result"]["terminal_kind"].asString(), "end");
