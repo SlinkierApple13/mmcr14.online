@@ -16,6 +16,7 @@
 
 #include "external/qingque/basic/mahjong.h"
 #include "external/qingque/rules/qingque.h"
+#include "game/engine/hand.h"
 #include "storage/database.h"
 #include "util/status.h"
 #include "util/status_or.h"
@@ -56,7 +57,8 @@ struct RoundEntry {
     std::int64_t timestamp_ms{0};
     double fan{0.0};
     std::vector<qingque::fan_code> fan_results;
-    std::vector<std::string> fan_names;
+    std::vector<int> fan_ids;
+    std::optional<game::HandWrapper> winning_hand;
 
     [[nodiscard]] auto has_player(std::int64_t player_id) const -> bool;
     [[nodiscard]] auto winner_player_id() const -> std::int64_t;

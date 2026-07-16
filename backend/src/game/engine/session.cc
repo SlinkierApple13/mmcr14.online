@@ -55,6 +55,7 @@ auto DebugInitialTiles(random::SeedContainer* seeder) -> std::vector<mahjong::ti
 }
 
 auto EventKindName(EventKind kind) -> std::string_view;
+auto MeldTypeName(mahjong::meld_type type) -> std::string_view;
 auto SerializeWinData(const WinData& data) -> Json::Value;
 
 auto SerializeRecordGameConfig(const GameConfig& config) -> Json::Value {
@@ -212,6 +213,9 @@ auto SerializeRecordRoundResult(const Event& terminal,
 			payload["fan_results"] = Json::Value(Json::arrayValue);
 			payload["fan_names"] = Json::Value(Json::arrayValue);
 		}
+		if (terminal.winning_hand.has_value()) {
+			payload["winning_hand"] = terminal.winning_hand->ToJson();
+		}
 		return payload;
 	}
 
@@ -222,6 +226,7 @@ auto SerializeRecordRoundResult(const Event& terminal,
 	payload["fan"] = 0.0;
 	payload["fan_results"] = Json::Value(Json::arrayValue);
 	payload["fan_names"] = Json::Value(Json::arrayValue);
+	payload["fan_ids"] = Json::Value(Json::arrayValue);
 	return payload;
 }
 
@@ -262,6 +267,9 @@ auto SerializeRecordEvent(const Event& event,
 	}
 	if (event.win_data.has_value()) {
 		payload["win_data"] = SerializeWinData(*event.win_data);
+	}
+	if (event.winning_hand.has_value()) {
+		payload["winning_hand"] = event.winning_hand->ToJson();
 	}
 	if (event.win_type_bits.has_value()) {
 		payload["win_type_bits"] = Json::UInt64(*event.win_type_bits);
@@ -2020,6 +2028,12 @@ void ActiveSession::execute_transition() {
 			}
 			wtype |= static_cast<mahjong::win_t>(transition.actor_seat);
 			transition.win_type_bits = static_cast<std::uint64_t>(wtype);
+			transition.winning_hand = HandWrapper{
+				.melds = seats_[transition.actor_seat].melds,
+				.hand_tiles = SortTilesForDisplay(seats_[transition.actor_seat].hand_tiles),
+				.winning_tile = ti,
+				.winning_type = mahjong::win_type(wtype),
+			};
 			mahjong::hand hand(seats_[transition.actor_seat].hand_tiles, melds, ti, wtype);
 			WinData win_data = BuildWinData(hand);
 			// fill missing fields
@@ -2051,6 +2065,12 @@ void ActiveSession::execute_transition() {
 				wtype |= mahjong::win_type::final_tile;
 			}
 			transition.win_type_bits = static_cast<std::uint64_t>(wtype);
+			transition.winning_hand = HandWrapper{
+				.melds = seats_[transition.actor_seat].melds,
+				.hand_tiles = SortTilesForDisplay(seats_[transition.actor_seat].hand_tiles),
+				.winning_tile = ti,
+				.winning_type = mahjong::win_type(wtype),
+			};
 			mahjong::hand hand(seats_[transition.actor_seat].hand_tiles, melds, ti, wtype);
 			WinData win_data = BuildWinData(hand);
 			// fill missing fields
@@ -2091,6 +2111,12 @@ void ActiveSession::execute_transition() {
 			wtype |= static_cast<mahjong::win_t>(transition.actor_seat);
 			transition.result_source_actor = transition.actor_seat;
 			transition.win_type_bits = static_cast<std::uint64_t>(wtype);
+			transition.winning_hand = HandWrapper{
+				.melds = seats_[transition.actor_seat].melds,
+				.hand_tiles = SortTilesForDisplay(seats_[transition.actor_seat].hand_tiles),
+				.winning_tile = seats_[transition.actor_seat].drawn_tile,
+				.winning_type = mahjong::win_type(wtype),
+			};
 			mahjong::hand hand(seats_[transition.actor_seat].hand_tiles, melds, seats_[transition.actor_seat].drawn_tile, wtype);
 			WinData win_data = BuildWinData(hand);
 			// fill missing fields

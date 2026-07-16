@@ -239,6 +239,71 @@ auto ParseFanNamesJson(std::string_view raw) -> util::StatusOr<std::vector<std::
     return fan_names;
 }
 
+auto FanIdsFromNames(const std::vector<std::string>& fan_names) -> std::vector<int> {
+    std::vector<int> fan_ids;
+    fan_ids.reserve(fan_names.size());
+    for (const auto& fan_name : fan_names) {
+        for (std::size_t index = 0; index < qingque::fans.size(); ++index) {
+            if (fan_name == qingque::fans[index].name) {
+                fan_ids.push_back(static_cast<int>(index));
+                break;
+            }
+        }
+    }
+    return fan_ids;
+}
+
+auto FanNamesFromIds(const std::vector<int>& fan_ids) -> std::vector<std::string> {
+    std::vector<std::string> fan_names;
+    fan_names.reserve(fan_ids.size());
+    for (const int fan_id : fan_ids) {
+        if (fan_id < 0 || fan_id >= static_cast<int>(qingque::fans.size())) {
+            continue;
+        }
+        fan_names.push_back(qingque::fans[static_cast<std::size_t>(fan_id)].name);
+    }
+    return fan_names;
+}
+
+auto FanIdsFromResults(const std::vector<qingque::fan_code>& fan_results) -> std::vector<int> {
+    std::vector<int> fan_ids;
+    std::unordered_set<int> seen;
+    for (const auto& fan_result : fan_results) {
+        for (std::size_t index = 0; index < qingque::fans.size(); ++index) {
+            if (!fan_result[index]) {
+                continue;
+            }
+            const auto fan_id = static_cast<int>(index);
+            if (seen.insert(fan_id).second) {
+                fan_ids.push_back(fan_id);
+            }
+        }
+    }
+    return fan_ids;
+}
+
+auto EncodeWinningHandJson(const std::optional<game::HandWrapper>& winning_hand) -> std::string {
+    return winning_hand.has_value() ? JsonToCompactString(winning_hand->ToJson()) : std::string();
+}
+
+auto ParseWinningHandJson(std::string_view raw) -> util::StatusOr<std::optional<game::HandWrapper>> {
+    if (raw.empty()) {
+        return std::optional<game::HandWrapper>{};
+    }
+    auto parsed = ParseJsonString(raw);
+    if (!parsed.ok()) {
+        return parsed.status();
+    }
+    if (parsed.value().isNull()) {
+        return std::optional<game::HandWrapper>{};
+    }
+    auto hand = game::HandWrapper::FromJson(parsed.value());
+    if (!hand.ok()) {
+        return hand.status();
+    }
+    return std::optional<game::HandWrapper>{hand.value()};
+}
+
 auto StepDone(storage::Statement& statement) -> util::Status {
     auto step = statement.Step();
     if (!step.ok()) {
@@ -899,8 +964,8 @@ auto StatsService::LoadFromDatabase() -> util::Status {
 
     auto statement = database_->Prepare(
         "SELECT session_identifier, round_number, drawn_game, winner_seat, from_seat, win_type_bits, "
-        "win_tile, turn, time_ms, fan_text, meld_count_json, players_json, fan_results_json, fan_names_json "
-        "FROM stats_round_entries;");
+        "win_tile, turn, time_ms, fan_text, meld_count_json, players_json, fan_results_json, fan_names_json, "
+        "winning_hand_json FROM stats_round_entries;");
     if (!statement.ok()) {
         return statement.status();
     }
@@ -957,7 +1022,13 @@ auto StatsService::LoadFromDatabase() -> util::Status {
         if (!fan_names.ok()) {
             return fan_names.status();
         }
-        entry.fan_names = fan_names.value();
+        entry.fan_ids = FanIdsFromNames(fan_names.value());
+
+        auto winning_hand = ParseWinningHandJson(statement.value().ColumnText(14));
+        if (!winning_hand.ok()) {
+            return winning_hand.status();
+        }
+        entry.winning_hand = std::move(winning_hand.value());
 
         rounds_[entry.round_key] = std::move(entry);
     }
@@ -1149,8 +1220,9 @@ auto StatsService::persist_round_locked(const RoundEntry& entry) -> util::Status
     auto statement = database_->Prepare(
         "INSERT OR REPLACE INTO stats_round_entries("
         "session_identifier, round_number, drawn_game, winner_seat, from_seat, win_type_bits, "
-        "win_tile, turn, time_ms, fan_text, meld_count_json, players_json, fan_results_json, fan_names_json) "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);");
+        "win_tile, turn, time_ms, fan_text, meld_count_json, players_json, fan_results_json, fan_names_json, "
+        "winning_hand_json) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15);");
     if (!statement.ok()) {
         return statement.status();
     }
@@ -1210,7 +1282,16 @@ auto StatsService::persist_round_locked(const RoundEntry& entry) -> util::Status
     if (!status.ok()) {
         return status;
     }
-    status = stmt.BindText(14, EncodeFanNamesJson(entry.fan_names));
+    status = stmt.BindText(14, EncodeFanNamesJson(FanNamesFromIds(entry.fan_ids)));
+    if (!status.ok()) {
+        return status;
+    }
+    const auto winning_hand_json = EncodeWinningHandJson(entry.winning_hand);
+    if (winning_hand_json.empty()) {
+        status = stmt.BindNull(15);
+    } else {
+        status = stmt.BindText(15, winning_hand_json);
+    }
     if (!status.ok()) {
         return status;
     }
@@ -1335,16 +1416,34 @@ auto ProjectRoundRecord(const Json::Value& record) -> util::StatusOr<RoundEntry>
     }
     round_entry.fan_results = std::move(fan_results);
 
-    const Json::Value& fan_names_json = (*round_result.value())["fan_names"];
-    if (!fan_names_json.isArray()) {
-        return util::Status::InvalidArgument("round_result.fan_names must be an array");
-    }
-    round_entry.fan_names.reserve(fan_names_json.size());
-    for (const auto& entry : fan_names_json) {
-        if (!entry.isString()) {
-            return util::Status::InvalidArgument("round_result.fan_names must contain strings");
+    round_entry.fan_ids = FanIdsFromResults(round_entry.fan_results);
+
+    if (round_entry.fan_ids.empty()) {
+        const Json::Value& fan_names_json = (*round_result.value())["fan_names"];
+        if (!fan_names_json.isArray()) {
+            return util::Status::InvalidArgument("round_result.fan_names must be an array");
         }
-        round_entry.fan_names.push_back(entry.asString());
+        std::vector<std::string> fan_names;
+        fan_names.reserve(fan_names_json.size());
+        for (const auto& entry : fan_names_json) {
+            if (!entry.isString()) {
+                return util::Status::InvalidArgument("round_result.fan_names must contain strings");
+            }
+            fan_names.push_back(entry.asString());
+        }
+        round_entry.fan_ids = FanIdsFromNames(fan_names);
+    }
+
+    const Json::Value& winning_hand = (*round_result.value())["winning_hand"];
+    if (!winning_hand.isNull()) {
+        if (!winning_hand.isObject()) {
+            return util::Status::InvalidArgument("round_result.winning_hand must be an object");
+        }
+        auto parsed_hand = game::HandWrapper::FromJson(winning_hand);
+        if (!parsed_hand.ok()) {
+            return parsed_hand.status();
+        }
+        round_entry.winning_hand = parsed_hand.value();
     }
 
     return round_entry;

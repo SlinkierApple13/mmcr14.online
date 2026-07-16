@@ -4075,13 +4075,16 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
 				entry["game_index"] = static_cast<int>(round_entry->round_key.round_number);
 				entry["winner_seat"] = round_entry->winner_seat;
 
-				if (!round_entry->fan_names.empty()) {
+				if (!round_entry->fan_ids.empty()) {
 					std::string fans_str;
-					for (std::size_t j = 0; j < round_entry->fan_names.size(); ++j) {
+					for (std::size_t j = 0; j < round_entry->fan_ids.size(); ++j) {
 						if (j > 0) {
 							fans_str += ", ";
 						}
-						fans_str += round_entry->fan_names[j];
+						const int fan_id = round_entry->fan_ids[j];
+						if (fan_id >= 0 && fan_id < static_cast<int>(qingque::fans.size())) {
+							fans_str += qingque::fans[static_cast<std::size_t>(fan_id)].name;
+						}
 					}
 					entry["fans_str"] = std::move(fans_str);
 				}

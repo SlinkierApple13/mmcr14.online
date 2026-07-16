@@ -123,6 +123,15 @@ auto MakeDiscardWinRecord() -> Json::Value {
         5.0,
         {MakeWinCode(qingque::seven_pairs)},
         {"七对"});
+    Json::Value winning_hand(Json::objectValue);
+    winning_hand["format"] = "mmcr.hand_wrapper.v1";
+    winning_hand["melds"] = Json::Value(Json::arrayValue);
+    winning_hand["hand_tiles"] = Json::Value(Json::arrayValue);
+    winning_hand["hand_tiles"].append(1);
+    winning_hand["hand_tiles"].append(1);
+    winning_hand["winning_tile"] = 9;
+    winning_hand["winning_type"] = Json::UInt64(MakeWinTypeBits(1));
+    record["round_result"]["winning_hand"] = std::move(winning_hand);
     return record;
 }
 
@@ -185,6 +194,10 @@ TEST(StatsProjectorTest, ProjectsDiscardWinFromCurrentRecordFormat) {
     EXPECT_EQ(projected.value().meld_count[2], 1);
     EXPECT_FALSE(projected.value().self_drawn());
     EXPECT_TRUE(projected.value().fan_results.front().test(qingque::seven_pairs));
+    ASSERT_FALSE(projected.value().fan_ids.empty());
+    EXPECT_EQ(projected.value().fan_ids.front(), qingque::seven_pairs);
+    ASSERT_TRUE(projected.value().winning_hand.has_value());
+    EXPECT_EQ(projected.value().winning_hand->winning_tile, 9);
 }
 
 TEST(StatsServiceTest, PersistsLoadsAndQueriesRoundEntries) {
@@ -213,13 +226,12 @@ TEST(StatsServiceTest, PersistsLoadsAndQueriesRoundEntries) {
 
     mmcr::stats::StatsFilter bob_filter;
     bob_filter.player_id = 22;
-    bob_filter.include_nonstandard = true;
     auto bob_stats = reloaded.Query(bob_filter);
     ASSERT_TRUE(bob_stats.ok()) << bob_stats.status().DebugString();
-    EXPECT_EQ(bob_stats.value().rounds.size(), 3u);
+    EXPECT_EQ(bob_stats.value().rounds.size(), 2u);
     EXPECT_EQ(bob_stats.value().tot_wins, 1u);
     EXPECT_DOUBLE_EQ(bob_stats.value().avg_win_pt(), 75.0);
-    EXPECT_DOUBLE_EQ(bob_stats.value().drawn_game_rate(), 1.0 / 3.0);
+    EXPECT_DOUBLE_EQ(bob_stats.value().drawn_game_rate(), 0.0);
 
     mmcr::stats::StatsFilter self_draw_filter;
     self_draw_filter.player_id = 33;
@@ -236,9 +248,11 @@ TEST(StatsServiceTest, PersistsLoadsAndQueriesRoundEntries) {
     ASSERT_EQ(standard_page.value().rounds.size(), 2u);
     EXPECT_GE(standard_page.value().rounds[0]->fan, standard_page.value().rounds[1]->fan);
 
-    mmcr::stats::StatsFilter include_nonstandard;
-    include_nonstandard.include_nonstandard = true;
-    auto all_rounds = reloaded.ListRounds(include_nonstandard, "time", "asc", 0, 10);
-    ASSERT_TRUE(all_rounds.ok()) << all_rounds.status().DebugString();
-    EXPECT_EQ(all_rounds.value().total_count, 3u);
+    ASSERT_TRUE(standard_page.value().rounds.front()->winning_hand.has_value());
+
+    mmcr::stats::StatsFilter nonstandard_only;
+    nonstandard_only.nonstandard_only = true;
+    auto nonstandard_rounds = reloaded.ListRounds(nonstandard_only, "time", "asc", 0, 10);
+    ASSERT_TRUE(nonstandard_rounds.ok()) << nonstandard_rounds.status().DebugString();
+    EXPECT_EQ(nonstandard_rounds.value().total_count, 1u);
 }

@@ -15,6 +15,7 @@
 #include "auth/service.h"
 #include "external/qingque/basic/mahjong.h"
 #include "game/config.h"
+#include "game/engine/hand.h"
 #include "game/engine/timer.h"
 #include "game/engine/wall.h"
 #include "game/rating_snapshot.h"
@@ -81,6 +82,7 @@ struct Event {
     std::optional<std::uint64_t> ui64_value; // auxiliary field
     std::optional<RoundStartSnapshot> round_start_snapshot;
     std::optional<WinData> win_data;
+    std::optional<HandWrapper> winning_hand;
     std::optional<std::uint64_t> win_type_bits;
     std::optional<int> result_source_actor;
     std::vector<mahjong::tile_t> revealed_hand_tiles{};
@@ -124,12 +126,6 @@ struct State {
     int this_priority{-1};
     std::optional<Event> next_transition;
     int current_player{-1};
-};
-
-struct MeldWrapper {
-    mahjong::meld meld_value{mahjong::meld::invalid};
-    int chow_mode{0}; // 0: none, 1: <1>23, 2: 1<2>3, 3: 12<3>
-    int meld_from_rel{0}; // 0: none, 1: right, 2: opposite, 3: left
 };
 
 enum PendingStatus {
