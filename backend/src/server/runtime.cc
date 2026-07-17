@@ -4077,10 +4077,15 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
 
 				if (!round_entry->fan_ids.empty()) {
 					std::string fans_str;
-					for (std::size_t j = 0; j < round_entry->fan_ids.size(); ++j) {
-						if (j > 0) {
+					auto fan_code = qingque::derepellenise(round_entry->fan_results[0]);
+					for (std::size_t j = 0, cnt = 0; j < round_entry->fan_ids.size(); ++j) {
+						if (!fan_code[round_entry->fan_ids[j]]) {
+							continue;
+						}
+						if (cnt > 0) {
 							fans_str += ", ";
 						}
+						++cnt;
 						const int fan_id = round_entry->fan_ids[j];
 						if (fan_id >= 0 && fan_id < static_cast<int>(qingque::fans.size())) {
 							fans_str += qingque::fans[static_cast<std::size_t>(fan_id)].name;

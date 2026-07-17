@@ -59,8 +59,7 @@ auto MakeRoundResult(bool completed,
                      std::uint64_t win_type_bits = 0,
                      std::optional<mahjong::tile_t> win_tile = std::nullopt,
                      double fan = 0.0,
-                     std::vector<qingque::fan_code> fan_results = {},
-                     std::vector<std::string> fan_names = {}) -> Json::Value {
+                     std::vector<qingque::fan_code> fan_results = {}) -> Json::Value {
     Json::Value result(Json::objectValue);
     result["completed"] = completed;
     result["terminal_kind"] = std::move(terminal_kind);
@@ -98,12 +97,6 @@ auto MakeRoundResult(bool completed,
         fan_results_json.append(fan_result.to_string());
     }
     result["fan_results"] = std::move(fan_results_json);
-
-    Json::Value fan_names_json(Json::arrayValue);
-    for (const auto& fan_name : fan_names) {
-        fan_names_json.append(fan_name);
-    }
-    result["fan_names"] = std::move(fan_names_json);
     return result;
 }
 
@@ -121,8 +114,7 @@ auto MakeDiscardWinRecord() -> Json::Value {
         MakeWinTypeBits(1),
         9,
         5.0,
-        {MakeWinCode(qingque::seven_pairs)},
-        {"七对"});
+        {MakeWinCode(qingque::seven_pairs)});
     Json::Value winning_hand(Json::objectValue);
     winning_hand["format"] = "mmcr.hand_wrapper.v1";
     winning_hand["melds"] = Json::Value(Json::arrayValue);
@@ -149,8 +141,7 @@ auto MakeSelfDrawRecord() -> Json::Value {
         MakeWinTypeBits(2, mahjong::win_type::self_drawn),
         24,
         3.0,
-        {MakeWinCode(qingque::full_flush)},
-        {"清一色"});
+        {MakeWinCode(qingque::full_flush)});
     return record;
 }
 
