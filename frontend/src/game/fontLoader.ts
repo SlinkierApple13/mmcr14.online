@@ -1,5 +1,5 @@
-import simkaiUrl from '../fonts/simkai.woff2'
-import simfangUrl from '../fonts/simfang-old.woff2'
+import cwtexKaiUrl from '../fonts/cwtex-q-kai-zh-medium.woff2'
+import cwtexFangsongUrl from '../fonts/cwtex-q-fangsong-zh-medium.woff2'
 import latinModernUrl from '../fonts/latinmodern-math.woff2'
 
 function isAnyFontAvailable(fontNames: string[]): boolean {
@@ -40,21 +40,24 @@ export function loadMissingFonts(): void {
 
   const fonts = [
     {
-      name: 'SimKai',
-      localNames: ['SimKai', 'KaiTi', 'KaiTi_GB2312', 'STKaiti', 'AR PL UKai CN', '楷体'],
-      url: simkaiUrl,
+      name: 'CwTeXQKai',
+      localNames: ['cwTeX Q KaiZH Medium', 'cwTeX Q Kai Medium'],
+      url: cwtexKaiUrl,
+      format: 'woff2',
       alwaysDownload: false,
     },
     {
-      name: 'SimFang',
-      localNames: ['SimFang', 'FangSong', 'FangSong_GB2312', 'STFangsong', '仿宋', '仿宋_GB2312'],
-      url: simfangUrl,
+      name: 'CwTeXQFangsong',
+      localNames: ['cwTeX Q FangsongZH Medium', 'cwTeX Q Fangsong Medium'],
+      url: cwtexFangsongUrl,
+      format: 'woff2',
       alwaysDownload: false,
     },
     {
       name: 'CmuSerif',
       localNames: ['CMU Serif', 'CMU Serif Regular', 'Latin Modern Math'],
       url: latinModernUrl,
+      format: 'woff2',
       alwaysDownload: true,
     },
   ]
@@ -62,7 +65,7 @@ export function loadMissingFonts(): void {
   const rules = fonts.map((font) => {
     const hasLocal = !font.alwaysDownload && isAnyFontAvailable(font.localNames)
     const localSrc = font.localNames.map((name) => `local('${name}')`).join(', ')
-    const src = hasLocal ? localSrc : `${localSrc}, url('${font.url}') format('woff2')`
+    const src = hasLocal ? localSrc : `${localSrc}, url('${font.url}') format('${font.format}')`
     return `
 @font-face {
   font-family: '${font.name}';
@@ -81,8 +84,8 @@ export function loadMissingFonts(): void {
 export async function waitForGameFonts(): Promise<void> {
   loadMissingFonts()
   await Promise.allSettled([
-    document.fonts.load('300px SimKai'),
-    document.fonts.load('300px SimFang'),
+    document.fonts.load('300px CwTeXQKai'),
+    document.fonts.load('300px CwTeXQFangsong'),
     document.fonts.load('300px CmuSerif'),
   ])
 }

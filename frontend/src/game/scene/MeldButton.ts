@@ -55,7 +55,7 @@ export class MeldButton extends Container {
     // Label
     const label = new Text({
       text: MELD_LABELS[meldType] ?? '?',
-      style: { fontFamily: 'SimFang, sans-serif', fontSize: 200, fill: 0x000000, align: 'center' },
+      style: { fontFamily: 'CwTeXQFangsong, sans-serif', fontSize: 200, fill: 0x000000, align: 'center' },
     })
     label.anchor.set(0.5)
     label.x = -TILE_WIDTH * 0.7

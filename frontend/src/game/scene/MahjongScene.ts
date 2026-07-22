@@ -767,7 +767,7 @@ export class MahjongScene {
     this.clearPendingButton()
 
     const style = new TextStyle({
-      fontFamily: 'CmuSerif, SimFang, sans-serif',
+      fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif',
       fontSize: 28,
       fill: 0x000000,
       align: 'center',
@@ -1046,7 +1046,7 @@ export class MahjongScene {
 
     const latencyText = new Text({
       text: '延迟：\u2014',
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 160, fill: 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: 160, fill: 0x000000, align: 'center' },
     })
     latencyText.anchor.set(0.5)
     latencyIndicator.addChild(latencyText)
@@ -1756,7 +1756,7 @@ export class MahjongScene {
 
     const label = new Text({
       text: ready ? '取消准备' : '准备',
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 200, fill: 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: 200, fill: 0x000000, align: 'center' },
     })
     label.anchor.set(0.5)
     btn.addChild(label)
@@ -1803,7 +1803,7 @@ export class MahjongScene {
     if (twoRows) {
       const t1 = new Text({
         text: `${oldRank} → ${newRank}`,
-        style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 160 / textScale, fill: 0x000000, align: 'center' },
+        style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: 160 / textScale, fill: 0x000000, align: 'center' },
       })
       t1.anchor.set(0.5, 0.5)
       t1.scale.set(textScale)
@@ -1815,7 +1815,7 @@ export class MahjongScene {
     const line2 = `积分 ${deltaPoints >= 0 ? '+' : '\u2212'}${Math.abs(deltaPoints).toFixed(2)} (等级分 ${deltaMu >= 0 ? '+' : '\u2212'}${Math.abs(deltaMu).toFixed(2)})`
     const t2 = new Text({
       text: line2,
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: (twoRows ? 110 : 140) / textScale, fill: twoRows ? 0x333333 : 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: (twoRows ? 110 : 140) / textScale, fill: twoRows ? 0x333333 : 0x000000, align: 'center' },
     })
     t2.anchor.set(0.5)
     t2.scale.set(textScale)

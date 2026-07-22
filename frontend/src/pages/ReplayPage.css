@@ -46,7 +46,7 @@
   background: rgba(153, 153, 153, 0.88);
   color: #f7f7f0;
   font-size: 24px;
-  font-family: CmuSerif, SimKai, sans-serif;
+  font-family: CmuSerif, CwTeXQKai, sans-serif;
   z-index: 10;
   text-align: center;
   padding: 24px;

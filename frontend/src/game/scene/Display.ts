@@ -62,8 +62,8 @@ export class Display extends Container {
     const processed = math ? text.replace(/-/g, '\u2212') : text
     const defaultScale = IS_MOBILE_ANY ? 4 : 1
     const fontFamily = simfang
-      ? 'CmuSerif, SimFang, sans-serif'
-      : 'CmuSerif, SimKai, sans-serif'
+      ? 'CmuSerif, CwTeXQFangsong, sans-serif'
+      : 'CmuSerif, CwTeXQKai, sans-serif'
 
     const label = new MyText(processed, {
       fontFamily, fontSize: fontSize / defaultScale, fill: color, align: 'center',
@@ -263,7 +263,7 @@ export class Countdown extends Container {
 
     this.timeText = new Text({
       text: '\u2212',
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 270, fill: 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: 270, fill: 0x000000, align: 'center' },
     })
     this.timeText.anchor.set(0.5)
     this.addChild(this.timeText)
@@ -364,7 +364,7 @@ export class TempLabel extends Container {
 
     const label = new Text({
       text,
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 270, fill: 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: 270, fill: 0x000000, align: 'center' },
     })
     label.anchor.set(0.5)
     this.addChild(label)
@@ -435,7 +435,7 @@ export class DirLabel extends Container {
 
     this.dirText = new Text({
       text: '',
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 330, fill: 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: 330, fill: 0x000000, align: 'center' },
     })
     this.dirText.anchor.set(0.5)
     this.dirText.rotation = -Math.PI * localDir / 2

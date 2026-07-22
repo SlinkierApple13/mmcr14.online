@@ -109,7 +109,7 @@ export class OptDisplay extends Container {
 
     const text = new Text({
       text: labelText,
-      style: { fontFamily: 'CmuSerif, SimFang, sans-serif', fontSize: 170, fill: 0x000000, align: 'center' },
+      style: { fontFamily: 'CmuSerif, CwTeXQFangsong, sans-serif', fontSize: 170, fill: 0x000000, align: 'center' },
     })
     text.anchor.set(0.5)
     text.x = 0
