@@ -2,6 +2,36 @@ This project is an online platform for a mahjong house rule called 青雀 / MMCR
 
 This repository includes several fonts:
 - Latin Modern Math
-- cwTeX Q Kai Medium
-- cwTeX Q Fangsong Medium
-  
+- Fandol Kai
+- Fandol Fang
+
+## Third-party fonts
+
+### Fandol
+
+`frontend/src/fonts/fandol-kai-regular.woff2` and
+`frontend/src/fonts/fandol-fang-regular.woff2` are WOFF2 conversions of
+`FandolKai-Regular.otf` and `FandolFang-Regular.otf` from Fandol 0.3. The
+fonts were developed by the Fandol team, Clerk Ma and Jie Su, and are
+distributed separately from the Apache-2.0-licensed project code under the
+GNU General Public License version 3 with the upstream font exception.
+
+The files were mechanically converted from the upstream OpenType fonts to
+WOFF2 on 2026-07-28; glyph mappings were not modified. The upstream package
+is available from [CTAN](https://ctan.org/pkg/fandol). The complete license
+and upstream notice are included in `frontend/src/fonts/fandol-COPYING.txt`
+and `frontend/src/fonts/fandol-NOTICE.txt`.
+
+### Latin Modern Math
+
+`frontend/src/fonts/latinmodern-math.woff2` is a WOFF2 conversion of
+`latinmodern-math.otf` from Latin Modern Math 1.959, dated 2014-09-05.
+Copyright 2012-2014 B. Jackowski, P. Strzelczyk, and P. Pianowski on behalf
+of TeX Users Groups. It is distributed separately from the
+Apache-2.0-licensed project code under the GUST Font License, an instance of
+the LaTeX Project Public License 1.3c or, at your option, any later version.
+
+The upstream package is available from [CTAN](https://ctan.org/pkg/lm-math).
+The complete license is included in
+`frontend/src/fonts/latinmodern-math-GUST-FONT-LICENSE.txt`.
+
