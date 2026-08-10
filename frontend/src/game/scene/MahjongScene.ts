@@ -930,9 +930,9 @@ export class MahjongScene {
 
     if (isMobile.any) {
       if (sw > sh) {
-        this.center.x = sh / 2 + 1.4 * TILE_HEIGHT * sh * WINDOW_SCALE / SCALE_FACTOR
+        this.center.x = sw / 2
         this.center.y = sh / 2
-        this.center.rotation = -Math.PI / 2
+        this.center.rotation = 0
         this.center.scale.set(sh * WINDOW_SCALE / SCALE_FACTOR)
       } else {
         this.center.x = sw / 2
