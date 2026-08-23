@@ -1,8 +1,8 @@
 #pragma once
 
 #include <bitset>
+#include <cstdint>
 #include <unordered_map>
-#include <stdint.h>
 #include <vector>
 
 namespace qingque {

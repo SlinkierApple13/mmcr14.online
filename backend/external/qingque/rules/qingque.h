@@ -12,8 +12,6 @@
 
 namespace qingque {
 
-    using namespace mahjong;
-
     namespace patterns {
         extern unsigned long long nine_gates_m_s;
         extern unsigned long long nine_gates_p;
@@ -40,7 +38,7 @@ namespace qingque {
             special_compatible(special_compatible), is_special(is_special), is_occasional(is_occasional), fan_value(fan_value) {}
     };
 
-    using fan = scoring_element<uint8_t, tag>;
+    using fan = mahjong::scoring_element<uint8_t, tag>;
     using fan_code = std::bitset<code_size>;
 
     extern mahjong::verifier is_seven_pairs;
