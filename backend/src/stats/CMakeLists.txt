@@ -1,5 +1,7 @@
 add_library(mmcr_stats STATIC
-	service.cc)
+	service.cc
+	round_entry.cc
+	round_collection.cc)
 
 add_library(mmcr::stats ALIAS mmcr_stats)
 

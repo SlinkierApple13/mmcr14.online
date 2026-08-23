@@ -2,7 +2,9 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(ARGON2 REQUIRED IMPORTED_TARGET libargon2)
 
 add_library(mmcr_auth STATIC
-	service.cc)
+	service.cc
+	password.cc
+	storage_ops.cc)
 
 add_library(mmcr::auth ALIAS mmcr_auth)
 

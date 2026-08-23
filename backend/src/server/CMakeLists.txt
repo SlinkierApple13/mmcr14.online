@@ -1,5 +1,9 @@
 add_library(mmcr_server STATIC
-	runtime.cc)
+	runtime.cc
+	runtime_helpers.cc
+	runtime_state.cc
+	http_routes.cc
+	ws_controllers.cc)
 add_library(mmcr::server ALIAS mmcr_server)
 
 target_compile_features(mmcr_server PUBLIC cxx_std_20)
