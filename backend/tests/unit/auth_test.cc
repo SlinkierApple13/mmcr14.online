@@ -36,12 +36,12 @@ TEST(AuthServiceTest, RegisterLoginRefreshAndLogoutFlow) {
 
     const auto register_result = auth.Register(
         {.username = "PlayerOne",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 1'000});
     ASSERT_TRUE(register_result.ok()) << register_result.status().DebugString();
 
     auto login = auth.Login(
-        {.identity = "PLAYERONE", .password = "secret-password", .now_ms = 3'000});
+        {.identity = "PLAYERONE", .password = "secretpass123", .now_ms = 3'000});
     ASSERT_TRUE(login.ok()) << login.status().DebugString();
     EXPECT_EQ(login.value().player.username, "PlayerOne");
 
@@ -75,13 +75,13 @@ TEST(AuthServiceTest, EnforcesCaseInsensitiveUniqueness) {
 
     auto first = auth.Register(
         {.username = "CaseUser",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 10'000});
     ASSERT_TRUE(first.ok()) << first.status().DebugString();
 
     auto duplicate_username = auth.Register(
         {.username = "caseuser",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 11'000});
     EXPECT_FALSE(duplicate_username.ok());
 }
@@ -98,33 +98,33 @@ TEST(AuthServiceTest, ChangePasswordKeepsCurrentSessionButRevokesOthers) {
 
     auto register_result = auth.Register(
         {.username = "PasswordUser",
-         .password = "old-password",
+         .password = "oldpass123",
          .now_ms = 20'000});
     ASSERT_TRUE(register_result.ok()) << register_result.status().DebugString();
 
     auto first_session = auth.Login(
-        {.identity = "PasswordUser", .password = "old-password", .now_ms = 21'000});
+        {.identity = "PasswordUser", .password = "oldpass123", .now_ms = 21'000});
     ASSERT_TRUE(first_session.ok()) << first_session.status().DebugString();
 
     auto second_session = auth.Login(
-        {.identity = "passworduser", .password = "old-password", .now_ms = 21'500});
+        {.identity = "passworduser", .password = "oldpass123", .now_ms = 21'500});
     ASSERT_TRUE(second_session.ok()) << second_session.status().DebugString();
 
     const auto change_status = auth.ChangePassword(
         {.session_token = first_session.value().session.token,
-         .current_password = "old-password",
-         .new_password = "new-password",
+         .current_password = "oldpass123",
+         .new_password = "newpass123",
          .now_ms = 22'000});
     ASSERT_TRUE(change_status.ok()) << change_status.DebugString();
 
     EXPECT_TRUE(auth.Authenticate(first_session.value().session.token, 22'100).ok());
     EXPECT_FALSE(auth.Authenticate(second_session.value().session.token, 22'100).ok());
     EXPECT_FALSE(auth.Login(
-                     {.identity = "PasswordUser", .password = "old-password", .now_ms = 22'200})
+                     {.identity = "PasswordUser", .password = "oldpass123", .now_ms = 22'200})
                      .ok());
 
     auto login_with_new_password = auth.Login(
-        {.identity = "PasswordUser", .password = "new-password", .now_ms = 22'300});
+        {.identity = "PasswordUser", .password = "newpass123", .now_ms = 22'300});
     ASSERT_TRUE(login_with_new_password.ok()) << login_with_new_password.status().DebugString();
 }
 
@@ -140,13 +140,13 @@ TEST(AuthServiceTest, PlayerIdsDoNotReuseDeletedLargestId) {
 
     auto first = auth.Register(
         {.username = "FirstUser",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 1'000});
     ASSERT_TRUE(first.ok()) << first.status().DebugString();
 
     auto second = auth.Register(
         {.username = "SecondUser",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 2'000});
     ASSERT_TRUE(second.ok()) << second.status().DebugString();
 
@@ -160,7 +160,7 @@ TEST(AuthServiceTest, PlayerIdsDoNotReuseDeletedLargestId) {
 
     auto third = auth.Register(
         {.username = "ThirdUser",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 3'000});
     ASSERT_TRUE(third.ok()) << third.status().DebugString();
     EXPECT_EQ(third.value().player.player_id, 3);
@@ -208,13 +208,13 @@ TEST(AuthServiceTest, MigrationToAutoincrementPreservesCredentialsAndIdSequence)
 
     auto first = auth.Register(
         {.username = "MigratedUserOne",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 1'000});
     ASSERT_TRUE(first.ok()) << first.status().DebugString();
 
     auto second = auth.Register(
         {.username = "MigratedUserTwo",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 2'000});
     ASSERT_TRUE(second.ok()) << second.status().DebugString();
 
@@ -222,7 +222,7 @@ TEST(AuthServiceTest, MigrationToAutoincrementPreservesCredentialsAndIdSequence)
 
     auto login_existing = auth.Login(
         {.identity = "MigratedUserOne",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 2'500});
     ASSERT_TRUE(login_existing.ok()) << login_existing.status().DebugString();
     EXPECT_EQ(login_existing.value().player.player_id, 1);
@@ -234,7 +234,7 @@ TEST(AuthServiceTest, MigrationToAutoincrementPreservesCredentialsAndIdSequence)
 
     auto third = auth.Register(
         {.username = "MigratedUserThree",
-         .password = "secret-password",
+         .password = "secretpass123",
          .now_ms = 3'000});
     ASSERT_TRUE(third.ok()) << third.status().DebugString();
     EXPECT_EQ(third.value().player.player_id, 3);

@@ -118,6 +118,11 @@ TEST(GameHubTest, LeavingPendingSessionBroadcastsUpdatedSnapshot) {
     ASSERT_TRUE(created.ok()) << created.status().DebugString();
 
     const auto session_id = created.value().session_id;
+    const auto owner_join_status = hub.connect_player(ConnectPlayerRequest{
+        .player = MakePlayer(101, "Alpha"),
+        .session_id = session_id,
+    });
+    ASSERT_TRUE(owner_join_status.ok()) << owner_join_status.DebugString();
     const auto join_status = hub.connect_player(ConnectPlayerRequest{
         .player = MakePlayer(102, "Beta"),
         .session_id = session_id,
@@ -155,6 +160,11 @@ TEST(GameHubTest, DisconnectingPendingSessionBroadcastsUpdatedSnapshot) {
     ASSERT_TRUE(created.ok()) << created.status().DebugString();
 
     const auto session_id = created.value().session_id;
+    const auto owner_join_status = hub.connect_player(ConnectPlayerRequest{
+        .player = MakePlayer(101, "Alpha"),
+        .session_id = session_id,
+    });
+    ASSERT_TRUE(owner_join_status.ok()) << owner_join_status.DebugString();
     const auto join_status = hub.connect_player(ConnectPlayerRequest{
         .player = MakePlayer(102, "Beta"),
         .session_id = session_id,
@@ -185,6 +195,12 @@ TEST(GameHubTest, SwitchingPendingSessionsBroadcastsOldRoomSnapshot) {
     });
     ASSERT_TRUE(first.ok()) << first.status().DebugString();
 
+    const auto first_owner_join = hub.connect_player(ConnectPlayerRequest{
+        .player = MakePlayer(101, "Alpha"),
+        .session_id = first.value().session_id,
+    });
+    ASSERT_TRUE(first_owner_join.ok()) << first_owner_join.DebugString();
+
     const auto first_join = hub.connect_player(ConnectPlayerRequest{
         .player = MakePlayer(102, "Beta"),
         .session_id = first.value().session_id,
@@ -197,6 +213,12 @@ TEST(GameHubTest, SwitchingPendingSessionsBroadcastsOldRoomSnapshot) {
         .queue_config = QueueConfig{},
     });
     ASSERT_TRUE(second.ok()) << second.status().DebugString();
+
+    const auto second_owner_join = hub.connect_player(ConnectPlayerRequest{
+        .player = MakePlayer(103, "Gamma"),
+        .session_id = second.value().session_id,
+    });
+    ASSERT_TRUE(second_owner_join.ok()) << second_owner_join.DebugString();
 
     transport.clear();
 

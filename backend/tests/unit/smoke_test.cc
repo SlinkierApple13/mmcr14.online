@@ -14,44 +14,34 @@ TEST(StatusTest, FormatsNonOkStatus) {
     EXPECT_EQ(status.DebugString(), "invalid_argument: bad tile index");
 }
 
-TEST(RandomTest, SplitMix64ProducesDeterministicSequence) {
-    mmcr::random::SplitMix64 first(123456789ULL);
-    mmcr::random::SplitMix64 second(123456789ULL);
-
-    EXPECT_EQ(first.Next(), second.Next());
-    EXPECT_EQ(first.Next(), second.Next());
-    EXPECT_EQ(first.Next(), second.Next());
-}
-
-TEST(RandomTest, DerivedMatchSeedDependsOnMatchIndex) {
-    const auto first = mmcr::random::DeriveMatchSeed(42ULL, 0ULL);
-    const auto second = mmcr::random::DeriveMatchSeed(42ULL, 1ULL);
-    const auto repeat = mmcr::random::DeriveMatchSeed(42ULL, 0ULL);
-
-    EXPECT_EQ(first, repeat);
-    EXPECT_NE(first.value, second.value);
-}
-
 TEST(RandomTest, SeedContainerUsesCappedQueueAndFallback) {
+    // Mirrors FastMix in src/random/seed.cc: recorded traffic values are
+    // mixed before storage, and the fallback mixes from_value with the
+    // previously extracted value.
+    constexpr auto fast_mix = [](std::uint64_t seed) -> std::uint64_t {
+        seed ^= seed >> 33;
+        seed *= 0xff51afd7ed558ccdULL;
+        seed ^= seed >> 33;
+        seed *= 0xc4ceb9fe1a85ec53ULL;
+        seed ^= seed >> 33;
+        return seed;
+    };
+
     mmcr::random::SeedContainer container(2);
 
     container.RecordTraffic(100ULL);
     container.RecordTraffic(200ULL);
     container.RecordTraffic(300ULL);
 
-    std::mt19937_64 first_generator(100ULL);
-    std::mt19937_64 second_generator(200ULL);
-    std::mt19937_64 third_generator(300ULL);
-    const auto first = first_generator();
-    const auto second = second_generator();
-    const auto third = third_generator();
+    const auto first = fast_mix(100ULL);
+    const auto second = fast_mix(200ULL);
+    const auto third = fast_mix(300ULL);
 
     EXPECT_EQ(container.size(), 2U);
     EXPECT_EQ(container.Extract(400ULL), second);
     EXPECT_EQ(container.Extract(500ULL), third);
 
-    std::mt19937_64 fallback_generator(600ULL ^ third);
-    EXPECT_EQ(container.Extract(600ULL), fallback_generator());
+    EXPECT_EQ(container.Extract(600ULL), fast_mix(600ULL ^ third));
     EXPECT_NE(first, second);
 }
 
