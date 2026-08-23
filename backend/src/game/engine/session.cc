@@ -1,454 +1,24 @@
-#include "game/engine/session.h"
+#include "game/engine/session_internal.h"
 
 #include <algorithm>
 #include <chrono>
-#include <iostream>
+#include <limits>
 #include <random>
-#include <string_view>
+#include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "game/hub/hub.h"
 #include "random/seed.h"
-#include "storage/game_record.h"
-#include "external/qingque/rules/qingque.h"
 #include "external/qingque/rules/w_data.h"
 
 namespace mmcr::game {
-namespace {
 
-auto now_ns() -> std::uint64_t {
-	static uint64_t offset = 0;
-	static bool initialized = false;
-	
-	if (!initialized) {
-		offset = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-			std::chrono::system_clock::now().time_since_epoch()).count()) -
-			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count());
-		initialized = true;
-	}
+// ---------------------------------------------------------------------------
+// Inbound message parsing helpers
+// ---------------------------------------------------------------------------
 
-	return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count() + offset);
-}
-
-auto now_ms() -> std::int64_t {
-	return static_cast<std::int64_t>(now_ns() / 1000000);
-}
-
-// Returns a set of initial tiles for debug mode.
-auto DebugInitialTiles(random::SeedContainer* seeder) -> std::vector<mahjong::tile_t> {
-	using namespace mahjong::tile_literals;
-	using namespace mahjong::honours;
-	static std::mt19937_64 rng(seeder->Extract());
-	static std::uniform_int_distribution<int> dist(1, 9);
-	const int roll = dist(rng);
-	switch (roll) {
-		case 1: return { 1_m, 2_m, 3_m, 4_m, 5_m, 6_m, 7_m, 8_m, 9_m };
-		case 2: return { 1_p, 2_p, 3_p, 4_p, 5_p, 6_p, 7_p, 8_p, 9_p };
-		case 3: return { 1_s, 2_s, 3_s, 4_s, 5_s, 6_s, 7_s, 8_s, 9_s };
-		case 4: return { 1_m, 2_m, 3_m, 1_p, 2_p, 3_p, 1_s, 2_s, 3_s };
-		case 5: return { 4_m, 5_m, 6_m, 4_p, 5_p, 6_p, 4_s, 5_s, 6_s };
-		case 6: return { 7_m, 8_m, 9_m, 7_p, 8_p, 9_p, 7_s, 8_s, 9_s };
-		default: return { 1_m, 9_m, 1_p, 9_p, 1_s, 9_s, E, S, W, N, C, F, P };
-	}
-}
-
-auto EventKindName(EventKind kind) -> std::string_view;
-auto MeldTypeName(mahjong::meld_type type) -> std::string_view;
-auto SerializeWinData(const WinData& data) -> Json::Value;
-
-auto SerializeRecordGameConfig(const GameConfig& config) -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	payload["primary_timer_ms"] = config.primary_timer_ms;
-	payload["secondary_timer_ms"] = config.secondary_timer_ms;
-	payload["auxiliary_timer_ms"] = config.auxiliary_timer_ms;
-	payload["round_count"] = config.round_count;
-	payload["seat_shuffle_period"] = config.seat_shuffle_period;
-	payload["recorded"] = config.recorded;
-	payload["debug_mode"] = config.debug_mode;
-	payload["public_session"] = config.public_session;
-	return payload;
-}
-
-auto SerializeRecordTiles(const std::vector<mahjong::tile_t>& tiles) -> Json::Value {
-	Json::Value payload(Json::arrayValue);
-	for (const auto tile : tiles) {
-		payload.append(Json::UInt(static_cast<unsigned int>(tile)));
-	}
-	return payload;
-}
-
-auto SerializeRecordRoundStartSnapshot(const RoundStartSnapshot& snapshot) -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	if (snapshot.seat_shuffle_seed.has_value()) {
-		payload["seat_shuffle_seed"] = Json::UInt64(*snapshot.seat_shuffle_seed);
-	} else {
-		payload["seat_shuffle_seed"] = Json::Value(Json::nullValue);
-	}
-	Json::Value wall_seeds(Json::arrayValue);
-	for (const auto seed : snapshot.wall_seeds) {
-		wall_seeds.append(Json::UInt64(seed));
-	}
-	payload["wall_seeds"] = std::move(wall_seeds);
-	Json::Value player_ids(Json::arrayValue);
-	for (const auto player_id : snapshot.player_ids) {
-		player_ids.append(Json::Int64(player_id));
-	}
-	payload["player_ids"] = std::move(player_ids);
-	return payload;
-}
-
-auto StartsStoredRoundTurn(EventKind kind) -> bool {
-	return kind == EventKind::kDrawTile || kind == EventKind::kChow ||
-		kind == EventKind::kPung || kind == EventKind::kMeldedKong;
-}
-
-auto CountsAsStoredMeld(EventKind kind) -> bool {
-	return kind == EventKind::kChow || kind == EventKind::kPung ||
-		kind == EventKind::kMeldedKong || kind == EventKind::kAddedKong ||
-		kind == EventKind::kConcealedKong;
-}
-
-void AdvanceStoredRoundTurn(int next_actor, int* current_actor, std::int64_t* turn) {
-	if (*current_actor == next_actor) {
-		return;
-	}
-	int idx = *current_actor;
-	do {
-		idx = (idx + 1) % 4;
-		if (idx == 0) {
-			++(*turn);
-		}
-	} while (idx != next_actor);
-	*current_actor = next_actor;
-}
-
-auto SerializeStringArray(const std::vector<std::string>& values) -> Json::Value {
-	Json::Value payload(Json::arrayValue);
-	for (const auto& value : values) {
-		payload.append(value);
-	}
-	return payload;
-}
-
-auto SerializeFanCodeArray(const std::vector<qingque::fan_code>& fan_codes) -> Json::Value {
-	Json::Value payload(Json::arrayValue);
-	for (const auto& fan_code : fan_codes) {
-		payload.append(fan_code.to_string());
-	}
-	return payload;
-}
-
-auto SerializeMeldCount(const std::array<int, 4>& meld_count) -> Json::Value {
-	Json::Value payload(Json::arrayValue);
-	for (const int count : meld_count) {
-		payload.append(count);
-	}
-	return payload;
-}
-
-auto IsRoundResultTerminal(EventKind kind) -> bool {
-	return kind == EventKind::kDiscardWin ||
-		kind == EventKind::kRobAddedKongWin ||
-		kind == EventKind::kSelfDrawnWin ||
-		kind == EventKind::kDrawnGame;
-}
-
-auto FindRecordRoundResultTransition(const std::vector<Event>& transitions,
-							 std::size_t start_index) -> const Event* {
-	if (start_index >= transitions.size()) {
-		return nullptr;
-	}
-	for (std::size_t index = transitions.size(); index > start_index; --index) {
-		const Event& transition = transitions[index - 1];
-		if (IsRoundResultTerminal(transition.kind)) {
-			return &transition;
-		}
-	}
-	return &transitions.back();
-}
-
-auto SerializeRecordRoundResult(const Event& terminal,
-						const std::array<int, 4>& meld_count,
-						std::int64_t total_turn) -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	payload["completed"] = terminal.kind != EventKind::kEnd;
-	payload["terminal_kind"] = std::string(EventKindName(terminal.kind));
-	payload["drawn_game"] = terminal.kind == EventKind::kDrawnGame;
-	payload["turn"] = Json::Int64(total_turn);
-	payload["total_turn"] = Json::Int64(total_turn);
-	payload["time_ms"] = Json::Int64(terminal.timestamp_ms);
-	payload["meld_count"] = SerializeMeldCount(meld_count);
-
-	auto set_null = [&payload](const char* field_name) {
-		payload[field_name] = Json::Value(Json::nullValue);
-	};
-
-	if (terminal.kind == EventKind::kDiscardWin ||
-		terminal.kind == EventKind::kRobAddedKongWin ||
-		terminal.kind == EventKind::kSelfDrawnWin) {
-		payload["winner_seat"] = terminal.actor_seat;
-		if (terminal.result_source_actor.has_value()) {
-			payload["from_seat"] = *terminal.result_source_actor;
-		} else {
-			set_null("from_seat");
-		}
-		if (terminal.win_type_bits.has_value()) {
-			payload["win_type_bits"] = Json::UInt64(*terminal.win_type_bits);
-		} else {
-			payload["win_type_bits"] = Json::UInt64(0);
-		}
-		if (terminal.tile.has_value()) {
-			payload["win_tile"] = Json::UInt(static_cast<unsigned int>(*terminal.tile));
-		} else {
-			set_null("win_tile");
-		}
-		if (terminal.win_data.has_value()) {
-			payload["fan"] = terminal.win_data->win_fan;
-			payload["fan_results"] = SerializeFanCodeArray(terminal.win_data->win_fan_codes);
-			payload["fan_names"] = SerializeStringArray(terminal.win_data->win_fans);
-		} else {
-			payload["fan"] = 0.0;
-			payload["fan_results"] = Json::Value(Json::arrayValue);
-			payload["fan_names"] = Json::Value(Json::arrayValue);
-		}
-		if (terminal.winning_hand.has_value()) {
-			payload["winning_hand"] = terminal.winning_hand->ToJson();
-		}
-		return payload;
-	}
-
-	set_null("winner_seat");
-	set_null("from_seat");
-	set_null("win_tile");
-	payload["win_type_bits"] = Json::UInt64(0);
-	payload["fan"] = 0.0;
-	payload["fan_results"] = Json::Value(Json::arrayValue);
-	payload["fan_names"] = Json::Value(Json::arrayValue);
-	payload["fan_ids"] = Json::Value(Json::arrayValue);
-	return payload;
-}
-
-auto SerializeRecordEvent(const Event& event,
-				  std::optional<std::int64_t> round_total_turn = std::nullopt) -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	payload["kind"] = std::string(EventKindName(event.kind));
-	payload["actor_seat"] = event.actor_seat;
-	payload["timestamp_ms"] = Json::Int64(event.timestamp_ms);
-	payload["stage_counter"] = Json::UInt64(event.stage_counter);
-	if (event.round_turn.has_value()) {
-		payload["round_turn"] = Json::Int64(*event.round_turn);
-	}
-	if (round_total_turn.has_value()) {
-		payload["round_total_turn"] = Json::Int64(*round_total_turn);
-	}
-	if (event.tile.has_value()) {
-		payload["tile"] = Json::UInt(static_cast<unsigned int>(*event.tile));
-	}
-	if (event.use_drawn_tile.has_value()) {
-		payload["use_drawn_tile"] = *event.use_drawn_tile;
-	}
-	if (event.draw_from_back.has_value()) {
-		payload["draw_from_back"] = *event.draw_from_back;
-	}
-	if (event.forced.has_value()) {
-		payload["forced"] = *event.forced;
-	}
-	if (!event.drawn_tiles.empty()) {
-		payload["drawn_tiles"] = SerializeRecordTiles(event.drawn_tiles);
-	}
-	if (event.ui64_value.has_value()) {
-		payload["ui64_value"] = Json::UInt64(*event.ui64_value);
-	}
-	if (event.round_start_snapshot.has_value()) {
-		payload["round_start_snapshot"] =
-			SerializeRecordRoundStartSnapshot(*event.round_start_snapshot);
-	}
-	if (event.win_data.has_value()) {
-		payload["win_data"] = SerializeWinData(*event.win_data);
-	}
-	if (event.winning_hand.has_value()) {
-		payload["winning_hand"] = event.winning_hand->ToJson();
-	}
-	if (event.win_type_bits.has_value()) {
-		payload["win_type_bits"] = Json::UInt64(*event.win_type_bits);
-	}
-	if (event.result_source_actor.has_value()) {
-		payload["result_source_actor"] = *event.result_source_actor;
-	}
-	if (!event.revealed_hand_tiles.empty()) {
-		payload["revealed_hand_tiles"] = SerializeRecordTiles(event.revealed_hand_tiles);
-	}
-	if (!event.final_scores.empty()) {
-		Json::Value final_scores(Json::arrayValue);
-		for (const auto score : event.final_scores) {
-			final_scores.append(score);
-		}
-		payload["final_scores"] = std::move(final_scores);
-	}
-	return payload;
-}
-
-auto BuildWinData(const mahjong::hand& h) -> WinData {
-	WinData data{ .h = h };
-	auto fan_codes = qingque::evaluate_fans(h);
-	const qingque::w_data& wd = qingque_wd::get_wd();
-	// to get fan of a fan_code, use qingque::get_fan(wd, fan_code)
-	// set win_fan be the maximum fan among the fan_codes, and put the fan_code achieving the maximum fan the first in win_fan_codes
-	// also remove duplicate fan_codes
-	// do not evaluate get_fan too many times as it can be expensive
-	std::vector<std::pair<double, qingque::fan_code>> fan_code_fan_pairs;
-	for (const auto& fan_code : fan_codes) {
-		double fan = qingque::get_fan(wd, fan_code);
-		fan_code_fan_pairs.emplace_back(fan, fan_code);
-	}
-	std::sort(fan_code_fan_pairs.begin(), fan_code_fan_pairs.end(),
-			  [](const auto& a, const auto& b) { return a.first > b.first; });
-	if (!fan_code_fan_pairs.empty()) {
-		data.win_fan = fan_code_fan_pairs[0].first;
-		const auto deduped = qingque::dedupe(fan_code_fan_pairs[0].second);
-		for (std::size_t index = 0; index < qingque::fans.size(); ++index) {
-			if (!deduped.test(index)) {
-				continue;
-			}
-			data.win_fans.push_back(qingque::fans[index].name);
-		}
-	}
-	std::unordered_set<qingque::fan_code> seen;
-	std::vector<qingque::fan_code> unique_fan_codes;
-	for (const auto& pair : fan_code_fan_pairs) {
-		if (seen.insert(pair.second).second) {
-			unique_fan_codes.push_back(pair.second);
-		}
-	}
-	data.win_fan_codes = std::move(unique_fan_codes);
-	data.win_base_point = static_cast<int>(std::round(data.win_fan * data.win_fan));
-	return data;
-}
-
-auto SortTilesForDisplay(std::vector<mahjong::tile_t> tiles) -> std::vector<mahjong::tile_t> {
-	std::sort(tiles.begin(), tiles.end(), [](mahjong::tile_t left, mahjong::tile_t right) {
-		const int left_offset = (left & 0b11100000u) == 0b10100000u ? 1000 : 0;
-		const int right_offset = (right & 0b11100000u) == 0b10100000u ? 1000 : 0;
-		return static_cast<int>(left) + left_offset > static_cast<int>(right) + right_offset;
-	});
-	return tiles;
-}
-
-auto SerializeScores(const std::array<int, 4>& scores) -> Json::Value {
-	Json::Value payload(Json::arrayValue);
-	for (const int score : scores) {
-		payload.append(score);
-	}
-	return payload;
-}
-
-auto CountRemainingForViewer(const std::array<Seat, 4>& seats,
-					 int viewer_seat,
-					 mahjong::tile_t tile) -> int {
-	if (viewer_seat < 0 || viewer_seat >= static_cast<int>(seats.size())) {
-		return 0;
-	}
-
-	const Seat& viewer = seats[viewer_seat];
-	int count = 4 - static_cast<int>(std::count(viewer.hand_tiles.begin(), viewer.hand_tiles.end(), tile));
-	if (viewer.has_drawn_tile() && viewer.drawn_tile == tile) {
-		count -= 1;
-	}
-
-	for (const Seat& seat : seats) {
-		for (const auto& wrapper : seat.melds) {
-			if (!wrapper.meld_value.contains({tile})) {
-				continue;
-			}
-			switch (wrapper.meld_value.type()) {
-				case mahjong::meld_type::sequence:
-					count -= 1;
-					break;
-				case mahjong::meld_type::triplet:
-					count -= 3;
-					break;
-				case mahjong::meld_type::kong:
-					count -= 4;
-					break;
-			}
-		}
-		count -= static_cast<int>(std::count(seat.discard_pile.begin(), seat.discard_pile.end(), tile));
-	}
-
-	return std::max(0, count);
-}
-
-auto SerializeViewerWaitData(const std::array<Seat, 4>& seats, int viewer_seat) -> Json::Value {
-	if (viewer_seat < 0 || viewer_seat >= static_cast<int>(seats.size())) {
-		return Json::Value(Json::nullValue);
-	}
-
-	const Seat& seat = seats[viewer_seat];
-	const bool discardable = (seat.hand_tiles.size() % 3 == 2) || seat.has_drawn_tile();
-	Json::Value payload(Json::objectValue);
-	Json::Value details(Json::arrayValue);
-
-	if (!discardable) {
-		payload["type"] = "waits";
-		for (const auto& [wait_tile, fan_data] : seat.wait_options) {
-			Json::Value entry(Json::objectValue);
-			entry["tile"] = Json::UInt(static_cast<unsigned int>(wait_tile));
-			entry["base_f"] = fan_data.w_discard.first;
-			entry["selfdrawn_f"] = fan_data.w_drawn.first;
-			entry["remaining_count"] = CountRemainingForViewer(seats, viewer_seat, wait_tile);
-			details.append(std::move(entry));
-		}
-		payload["details"] = std::move(details);
-		return payload;
-	}
-
-	std::vector<mahjong::meld> melds;
-	melds.reserve(seat.melds.size());
-	for (const auto& wrapper : seat.melds) {
-		melds.push_back(wrapper.meld_value);
-	}
-
-	std::vector<mahjong::tile_t> hand_tiles = seat.hand_tiles;
-	if (seat.has_drawn_tile()) {
-		hand_tiles.push_back(seat.drawn_tile);
-	}
-	if (hand_tiles.empty()) {
-		return Json::Value(Json::nullValue);
-	}
-
-	const mahjong::tile_t seat_wind = mahjong::tile_set::honour_tiles[viewer_seat];
-	mahjong::hand hand(
-		hand_tiles,
-		melds,
-		hand_tiles.back(),
-		mahjong::win_type(false, false, false, false, seat_wind),
-		true,
-		false);
-	const auto wait_data = qingque::get_all_waits(qingque_wd::get_wd(), hand);
-
-	payload["type"] = "waits_all";
-	for (const auto& [discard_tile, added_map] : wait_data) {
-		Json::Value entry(Json::objectValue);
-		entry["discard_tile"] = Json::UInt(static_cast<unsigned int>(discard_tile));
-		Json::Value adds(Json::arrayValue);
-		for (const auto& [added_tile, fans] : added_map) {
-			Json::Value add_entry(Json::objectValue);
-			add_entry["tile"] = Json::UInt(static_cast<unsigned int>(added_tile));
-			add_entry["base_f"] = fans.first;
-			add_entry["selfdrawn_f"] = fans.second;
-			add_entry["remaining_count"] = CountRemainingForViewer(seats, viewer_seat, added_tile);
-			adds.append(std::move(add_entry));
-		}
-		entry["adds"] = std::move(adds);
-		details.append(std::move(entry));
-	}
-	payload["details"] = std::move(details);
-	return payload;
-}
-
-auto FindPayload(const Json::Value& message) -> const Json::Value* {
+const Json::Value* FindPayload(const Json::Value& message) {
 	if (!message.isObject()) {
 		return nullptr;
 	}
@@ -460,7 +30,7 @@ auto FindPayload(const Json::Value& message) -> const Json::Value* {
 	return &payload;
 }
 
-auto ParseEventKind(std::string_view value) -> std::optional<EventKind> {
+std::optional<EventKind> ParseEventKind(std::string_view value) {
 	// Certain event kinds are not expected to be sent by clients, so they are not parsed here.
 	if (value == "discard_tile") {
 		return EventKind::kDiscardTile;
@@ -498,7 +68,7 @@ auto ParseEventKind(std::string_view value) -> std::optional<EventKind> {
 	return std::nullopt;
 }
 
-auto ReadOptionalBool(const Json::Value& object, std::string_view name) -> std::optional<bool> {
+std::optional<bool> ReadOptionalBool(const Json::Value& object, std::string_view name) {
 	const Json::Value& value = object[std::string(name)];
 	if (!value.isBool()) {
 		return std::nullopt;
@@ -506,8 +76,7 @@ auto ReadOptionalBool(const Json::Value& object, std::string_view name) -> std::
 	return value.asBool();
 }
 
-auto ReadOptionalUInt64(const Json::Value& object, std::string_view name)
-	-> std::optional<std::uint64_t> {
+std::optional<std::uint64_t> ReadOptionalUInt64(const Json::Value& object, std::string_view name) {
 	const Json::Value& value = object[std::string(name)];
 	if (value.isUInt64()) {
 		return value.asUInt64();
@@ -524,8 +93,7 @@ auto ReadOptionalUInt64(const Json::Value& object, std::string_view name)
 	return std::nullopt;
 }
 
-auto ReadOptionalTile(const Json::Value& object, std::string_view name)
-	-> std::optional<mahjong::tile_t> {
+std::optional<mahjong::tile_t> ReadOptionalTile(const Json::Value& object, std::string_view name) {
 	auto value = ReadOptionalUInt64(object, name);
 	if (!value.has_value() || *value > std::numeric_limits<mahjong::tile_t>::max()) {
 		return std::nullopt;
@@ -533,7 +101,7 @@ auto ReadOptionalTile(const Json::Value& object, std::string_view name)
 	return static_cast<mahjong::tile_t>(*value);
 }
 
-auto IsPassMarginClaim(EventKind kind) -> bool {
+bool IsPassMarginClaim(EventKind kind) {
 	switch (kind) {
 		case EventKind::kChow:
 		case EventKind::kPung:
@@ -546,7 +114,7 @@ auto IsPassMarginClaim(EventKind kind) -> bool {
 	}
 }
 
-auto BuildPassAckEnvelope(std::uint64_t stage_counter) -> Json::Value {
+Json::Value BuildPassAckEnvelope(std::uint64_t stage_counter) {
 	Json::Value payload(Json::objectValue);
 	payload["stage_counter"] = Json::UInt64(stage_counter);
 
@@ -557,7 +125,9 @@ auto BuildPassAckEnvelope(std::uint64_t stage_counter) -> Json::Value {
 	return envelope;
 }
 
-}  // namespace
+// ---------------------------------------------------------------------------
+// Construction, lifecycle and routing
+// ---------------------------------------------------------------------------
 
 ActiveSession::ActiveSession(random::SeedContainer* seed_container,
 							 GameHub* hub,
@@ -569,11 +139,11 @@ ActiveSession::ActiveSession(random::SeedContainer* seed_container,
 	  seed_container_(seed_container),
 	  hub_(hub),
 	  record_manager_(record_manager),
-	  session_id_(session_id) {
+	  identity_(SessionIdentity{ .id = session_id }) {
 	if (recording_enabled()) {
-		session_init_timestamp_ns_ = now_ns();
-		session_identifier_ =
-			std::to_string(session_id_) + "_" + std::to_string(session_init_timestamp_ns_);
+		identity_.init_timestamp_ns = now_ns();
+		identity_.identifier =
+			std::to_string(identity_.id) + "_" + std::to_string(identity_.init_timestamp_ns);
 	}
 	for (std::size_t i = 0; i < 4; ++i) {
 		seats_[i].player = players[i];
@@ -581,104 +151,7 @@ ActiveSession::ActiveSession(random::SeedContainer* seed_container,
 	init();
 }
 
-auto ActiveSession::recording_enabled() const -> bool {
-	return config_.recorded && record_manager_ != nullptr;
-}
-
-void ActiveSession::capture_round_record_state(const Event& transition) {
-	if (!recording_enabled() || !transition.round_start_snapshot.has_value()) {
-		return;
-	}
-
-	current_round_start_snapshot_ = transition.round_start_snapshot;
-	current_round_initial_seats_ = Json::Value(Json::arrayValue);
-	for (const auto& seat : seats_) {
-		Json::Value seat_payload(Json::objectValue);
-		auto player = seat.player.lock();
-		if (player != nullptr) {
-			seat_payload["player_id"] = Json::Int64(player->player_id);
-			seat_payload["player_name"] = player->username;
-		} else {
-			seat_payload["player_id"] = Json::Value(Json::nullValue);
-			seat_payload["player_name"] = Json::Value(Json::nullValue);
-		}
-		seat_payload["afk_counter"] = seat.afk_counter;
-		seat_payload["score"] = seat.score;
-		seat_payload["disconnected"] = seat.disconnected;
-		current_round_initial_seats_.append(std::move(seat_payload));
-	}
-	current_round_transition_start_index_ = transition_queue_.size();
-	current_round_event_start_index_ = event_queue_.size();
-	current_round_number_ = state_.round_counter;
-	current_round_saved_ = false;
-}
-
-void ActiveSession::enqueue_current_round_record() {
-	if (!recording_enabled() || current_round_saved_ || !current_round_start_snapshot_.has_value()) {
-		return;
-	}
-
-	Json::Value payload(Json::objectValue);
-	payload["version"] = 6;
-
-	Json::Value header(Json::objectValue);
-	header["session_identifier"] = session_identifier_;
-	header["round_number"] = Json::UInt64(current_round_number_);
-	header["game_config"] = SerializeRecordGameConfig(config_);
-	payload["header"] = std::move(header);
-	payload["round_start_snapshot"] =
-		SerializeRecordRoundStartSnapshot(*current_round_start_snapshot_);
-	payload["initial_seats"] = current_round_initial_seats_;
-	if (const Event* round_result = FindRecordRoundResultTransition(
-			transition_queue_, current_round_transition_start_index_);
-		round_result != nullptr) {
-		payload["round_result"] = SerializeRecordRoundResult(
-			*round_result,
-			current_round_meld_count_,
-			current_round_turn_);
-	}
-
-	Json::Value transition_queue(Json::arrayValue);
-	for (std::size_t index = current_round_transition_start_index_;
-		 index < transition_queue_.size();
-		 ++index) {
-		transition_queue.append(SerializeRecordEvent(transition_queue_[index], current_round_turn_));
-	}
-	payload["transition_queue"] = std::move(transition_queue);
-
-	Json::Value event_queue(Json::arrayValue);
-	for (std::size_t index = current_round_event_start_index_; index < event_queue_.size(); ++index) {
-		event_queue.append(SerializeRecordEvent(event_queue_[index], current_round_turn_));
-	}
-	payload["event_queue"] = std::move(event_queue);
-
-	Json::Value ratings_array(Json::arrayValue);
-	for (const auto& r : current_round_ratings_) {
-		ratings_array.append(r.ToJson());
-	}
-	payload["ratings"] = std::move(ratings_array);
-
-	Json::Value final_ratings_array(Json::arrayValue);
-	for (const auto& r : final_round_ratings_) {
-		final_ratings_array.append(r.ToJson());
-	}
-	payload["final_ratings"] = std::move(final_ratings_array);
-
-	auto status = record_manager_->Enqueue(storage::GameRecordTask{
-		.session_identifier = session_identifier_,
-		.round_number = current_round_number_,
-		.payload = std::move(payload),
-	});
-	if (!status.ok()) {
-		std::cerr << status.DebugString() << '\n';
-		return;
-	}
-
-	current_round_saved_ = true;
-}
-
-auto ActiveSession::handle_message(std::int64_t player_id, const Json::Value& message)
-	-> util::Status {
+util::Status ActiveSession::handle_message(std::int64_t player_id, const Json::Value& message) {
 	const auto seat_index = find_seat_index(player_id);
 	if (!seat_index.has_value()) {
 		return util::Status::NotFound("player is not in the active session");
@@ -748,7 +221,7 @@ auto ActiveSession::handle_message(std::int64_t player_id, const Json::Value& me
 	return handle_event(event);
 }
 
-auto ActiveSession::player_leaves(std::int64_t player_id) -> util::Status {
+util::Status ActiveSession::player_leaves(std::int64_t player_id) {
 	const auto seat_index = find_seat_index(player_id);
 	if (!seat_index.has_value()) {
 		return util::Status::NotFound("player is not in the active session");
@@ -761,7 +234,7 @@ auto ActiveSession::player_leaves(std::int64_t player_id) -> util::Status {
 	return handle_event(event);
 }
 
-auto ActiveSession::player_resumes(std::int64_t player_id) -> util::Status {
+util::Status ActiveSession::player_resumes(std::int64_t player_id) {
 	const auto seat_index = find_seat_index(player_id);
 	if (!seat_index.has_value()) {
 		return util::Status::NotFound("player is not in the active session");
@@ -774,8 +247,7 @@ auto ActiveSession::player_resumes(std::int64_t player_id) -> util::Status {
 	return handle_event(event);
 }
 
-auto ActiveSession::build_snapshot_for_player_id(std::int64_t player_id) const
-	-> util::StatusOr<Json::Value> {
+util::StatusOr<Json::Value> ActiveSession::build_snapshot_for_player_id(std::int64_t player_id) const {
 	std::lock_guard lock(state_.mutex);
 	const auto seat_index = find_seat_index(player_id);
 	if (!seat_index.has_value()) {
@@ -785,7 +257,7 @@ auto ActiveSession::build_snapshot_for_player_id(std::int64_t player_id) const
 	return build_snapshot_for_player(*seat_index);
 }
 
-auto ActiveSession::find_seat_index(std::int64_t player_id) const -> std::optional<int> {
+std::optional<int> ActiveSession::find_seat_index(std::int64_t player_id) const {
 	for (std::size_t index = 0; index < seats_.size(); ++index) {
 		if (seats_[index].player.matches(player_id)) {
 			return static_cast<int>(index);
@@ -794,7 +266,11 @@ auto ActiveSession::find_seat_index(std::int64_t player_id) const -> std::option
 	return std::nullopt;
 }
 
-auto ActiveSession::send_message(int target_seat, const Json::Value& message, int delay_ms) -> int {
+// ---------------------------------------------------------------------------
+// Delivery and timers
+// ---------------------------------------------------------------------------
+
+int ActiveSession::send_message(int target_seat, const Json::Value& message, int delay_ms) {
 	const int actual_delay_ms = std::max(0, delay_ms);
 	if (hub_ == nullptr || target_seat < 0 ||
 		target_seat >= static_cast<int>(seats_.size())) {
@@ -851,9 +327,9 @@ void ActiveSession::init() {
 		state_.this_priority = -1;
 		state_.current_player = -1;
 		scheduled_pending_.fill(std::nullopt);
-		ended_ = false;
-		ended_at_ms_ = 0;
-		final_scores_.fill(0);
+		lifecycle_.ended = false;
+		lifecycle_.ended_at_ms = 0;
+		lifecycle_.final_scores.fill(0);
 	}
 	// Fetch initial ratings for all players
 	if (hub_ != nullptr && hub_->transport() != nullptr) {
@@ -863,12 +339,12 @@ void ActiveSession::init() {
 			player_ids[i] = (player != nullptr) ? player->player_id : 0;
 		}
 	// Store ratings as vector; inject into first event below
-		current_round_ratings_ = hub_->transport()->get_player_ratings(player_ids);
+		recording_.ratings = hub_->transport()->get_player_ratings(player_ids);
 		// Inject usernames from seats
-		for (std::size_t i = 0; i < current_round_ratings_.size() && i < 4; ++i) {
+		for (std::size_t i = 0; i < recording_.ratings.size() && i < 4; ++i) {
 			const auto player = seats_[i].player.lock();
 			if (player != nullptr) {
-				current_round_ratings_[i].username = player->username;
+				recording_.ratings[i].username = player->username;
 			}
 		}
 	}
@@ -879,12 +355,12 @@ void ActiveSession::init() {
 
 void ActiveSession::end_session(std::int64_t timestamp_ms, bool enqueue_record) {
 	std::lock_guard lock(state_.mutex);
-	if (ended_) {
+	if (lifecycle_.ended) {
 		return;
 	}
 
-	ended_ = true;
-	ended_at_ms_ = timestamp_ms > 0 ? timestamp_ms : now_ms();
+	lifecycle_.ended = true;
+	lifecycle_.ended_at_ms = timestamp_ms > 0 ? timestamp_ms : now_ms();
 	state_.next_transition.reset();
 	state_.current_player = -1;
 	transition_timer_.stop();
@@ -892,8 +368,8 @@ void ActiveSession::end_session(std::int64_t timestamp_ms, bool enqueue_record) 
 	for (int seat = 0; seat < 4; ++seat) {
 		scheduled_pending_[seat].reset();
 		pending_start_timers_[seat].stop();
-		end_wait(seat, ended_at_ms_);
-		final_scores_[seat] = seats_[seat].score;
+		end_wait(seat, lifecycle_.ended_at_ms);
+		lifecycle_.final_scores[seat] = seats_[seat].score;
 	}
 	next_transition_not_before_ms_ = 0;
 
@@ -903,7 +379,7 @@ void ActiveSession::end_session(std::int64_t timestamp_ms, bool enqueue_record) 
 			const auto player = seats_[seat].player.lock();
 			player_ids[seat] = player != nullptr ? player->player_id : 0;
 		}
-		session_end_callback_(session_id_, player_ids, final_scores_,
+		session_end_callback_(identity_.id, player_ids, lifecycle_.final_scores,
 			static_cast<int>(state_.round_counter));
 	}
 
@@ -914,19 +390,19 @@ void ActiveSession::end_session(std::int64_t timestamp_ms, bool enqueue_record) 
 			const auto player = seats_[i].player.lock();
 			player_ids[i] = (player != nullptr) ? player->player_id : 0;
 		}
-		final_round_ratings_ = hub_->transport()->get_player_ratings(player_ids);
+		recording_.final_ratings = hub_->transport()->get_player_ratings(player_ids);
 	}
 
 	if (enqueue_record) {
 		const bool should_append_end_transition =
 			recording_enabled() &&
-			current_round_start_snapshot_.has_value() &&
+			recording_.start_snapshot.has_value() &&
 			(transition_queue_.empty() || transition_queue_.back().kind != EventKind::kEnd);
 		if (should_append_end_transition) {
 			Event transition{
 				.kind = EventKind::kEnd,
 				.actor_seat = 0,
-				.timestamp_ms = ended_at_ms_,
+				.timestamp_ms = lifecycle_.ended_at_ms,
 				.stage_counter = state_.stage_counter,
 			};
 			transition.final_scores.reserve(4);
@@ -938,6 +414,10 @@ void ActiveSession::end_session(std::int64_t timestamp_ms, bool enqueue_record) 
 		enqueue_current_round_record();
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Wait management
+// ---------------------------------------------------------------------------
 
 void ActiveSession::start_primary_wait(int seat, std::int64_t now) {
 	if (seat < 0 || seat >= static_cast<int>(seats_.size())) {
@@ -1014,7 +494,11 @@ PendingStatus ActiveSession::update_pending_status(int seat, std::int64_t now) {
 	return s.pending;
 }
 
-auto ActiveSession::handle_event(const Event& event) -> util::Status {
+// ---------------------------------------------------------------------------
+// Event handling
+// ---------------------------------------------------------------------------
+
+util::Status ActiveSession::handle_event(const Event& event) {
 	static constexpr int kPriorityStart = 100;
 	static constexpr int kPrioritySelf = 90;
 	static constexpr int kPriorityChow = 10;
@@ -1308,7 +792,7 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 	}
 
 	Event recorded_event = event;
-	recorded_event.round_turn = current_round_turn_;
+	recorded_event.round_turn = recording_.turn;
 	event_queue_.push_back(std::move(recorded_event));
 
 	if (state_.stage_counter != event.stage_counter && event.stage_counter != 0) {
@@ -1459,6 +943,10 @@ auto ActiveSession::handle_event(const Event& event) -> util::Status {
 	return util::Status::Ok();
 }
 
+// ---------------------------------------------------------------------------
+// Transition execution
+// ---------------------------------------------------------------------------
+
 void ActiveSession::execute_transition() {
 	std::unique_lock lock(state_.mutex);
 	if (!state_.next_transition.has_value()) {
@@ -1478,24 +966,24 @@ void ActiveSession::execute_transition() {
 
 	transition.timestamp_ms = now;
 	if (transition.kind == EventKind::kStart) {
-		current_round_turn_ = 0;
-		current_round_turn_actor_ = 3;
-		current_round_meld_count_.fill(0);
+		recording_.turn = 0;
+		recording_.turn_actor = 3;
+		recording_.meld_count.fill(0);
 	}
 	transition.round_turn =
 		(transition.kind == EventKind::kStart || transition.kind == EventKind::kPredraw)
 			? 0
-			: current_round_turn_;
+			: recording_.turn;
 	if (StartsStoredRoundTurn(transition.kind) &&
 		transition.actor_seat >= 0 && transition.actor_seat < 4) {
 		AdvanceStoredRoundTurn(
 			transition.actor_seat,
-			&current_round_turn_actor_,
-			&current_round_turn_);
+			&recording_.turn_actor,
+			&recording_.turn);
 	}
 	if (CountsAsStoredMeld(transition.kind) &&
 		transition.actor_seat >= 0 && transition.actor_seat < 4) {
-		++current_round_meld_count_[static_cast<std::size_t>(transition.actor_seat)];
+		++recording_.meld_count[static_cast<std::size_t>(transition.actor_seat)];
 	}
 
 	auto recompute_wait_options = [this](int seat) {
@@ -2172,491 +1660,9 @@ void ActiveSession::execute_transition() {
 	}
 }
 
-namespace {
-
-struct MsgPolicy {
-	Json::Value msg{};
-	int delay_ms{0};
-	PendingStatus set_pending{PendingStatus::kPendingNone};
-};
-
-auto BuildEnvelope(std::string_view type, Json::Value payload) -> Json::Value {
-	Json::Value envelope(Json::objectValue);
-	envelope["version"] = 1;
-	envelope["type"] = std::string(type);
-	envelope["payload"] = std::move(payload);
-	return envelope;
-}
-
-auto EventKindName(EventKind kind) -> std::string_view {
-	switch (kind) {
-		case EventKind::kStart:
-			return "start";
-		case EventKind::kPredraw:
-			return "predraw";
-		case EventKind::kDrawTile:
-			return "draw_tile";
-		case EventKind::kDiscardTile:
-			return "discard_tile";
-		case EventKind::kChow:
-			return "chow";
-		case EventKind::kPung:
-			return "pung";
-		case EventKind::kMeldedKong:
-			return "melded_kong";
-		case EventKind::kAddedKong:
-			return "added_kong";
-		case EventKind::kConcealedKong:
-			return "concealed_kong";
-		case EventKind::kDiscardWin:
-			return "discard_win";
-		case EventKind::kRobAddedKongWin:
-			return "rob_added_kong_win";
-		case EventKind::kSelfDrawnWin:
-			return "self_drawn_win";
-		case EventKind::kPass:
-			return "pass";
-		case EventKind::kFinalPass:
-			return "final_pass";
-		case EventKind::kDrawnGame:
-			return "drawn_game";
-		case EventKind::kEnd:
-			return "end";
-		case EventKind::kPlayerLeft:
-			return "player_left";
-		case EventKind::kPlayerResumed:
-			return "player_resumed";
-		case EventKind::kNone:
-			return "none";
-	}
-
-	return "unknown";
-}
-
-auto PendingStatusName(PendingStatus status) -> std::string_view {
-	switch (status) {
-		case PendingStatus::kPendingNone:
-			return "none";
-		case PendingStatus::kPendingPrimary:
-			return "primary";
-		case PendingStatus::kPendingSecondary:
-			return "secondary";
-		case PendingStatus::kPendingSlept:
-			return "slept";
-	}
-
-	return "none";
-}
-
-auto MeldTypeName(mahjong::meld_type type) -> std::string_view {
-	switch (type) {
-		case mahjong::meld_type::sequence:
-			return "sequence";
-		case mahjong::meld_type::triplet:
-			return "triplet";
-		case mahjong::meld_type::kong:
-			return "kong";
-	}
-
-	return "unknown";
-}
-
-auto IsSyncCheckpoint(EventKind kind) -> bool {
-	return kind == EventKind::kDiscardTile || kind == EventKind::kAddedKong ||
-		kind == EventKind::kConcealedKong || kind == EventKind::kSelfDrawnWin;
-}
-
-auto IsVisibleTransition(EventKind kind) -> bool {
-	switch (kind) {
-		case EventKind::kStart:
-		case EventKind::kPredraw:
-		case EventKind::kDrawTile:
-		case EventKind::kDiscardTile:
-		case EventKind::kChow:
-		case EventKind::kPung:
-		case EventKind::kMeldedKong:
-		case EventKind::kAddedKong:
-		case EventKind::kConcealedKong:
-		case EventKind::kDiscardWin:
-		case EventKind::kRobAddedKongWin:
-		case EventKind::kSelfDrawnWin:
-		case EventKind::kDrawnGame:
-		case EventKind::kEnd:
-			return true;
-		default:
-			return false;
-	}
-}
-
-auto IsPublicClaim(EventKind kind) -> bool {
-	switch (kind) {
-		case EventKind::kChow:
-		case EventKind::kPung:
-		case EventKind::kMeldedKong:
-		case EventKind::kAddedKong:
-		case EventKind::kConcealedKong:
-		case EventKind::kDiscardWin:
-		case EventKind::kRobAddedKongWin:
-		case EventKind::kSelfDrawnWin:
-		case EventKind::kPlayerLeft:
-		case EventKind::kPlayerResumed:
-			return true;
-		default:
-			return false;
-	}
-}
-
-auto WaitDurationMs(const GameConfig& config, PendingStatus pending, int auxiliary_ms = 0) -> int {
-	switch (pending) {
-		case PendingStatus::kPendingPrimary:
-			return GameConfig::with_margin(config.primary_timer_ms) + std::max(0, auxiliary_ms);
-		case PendingStatus::kPendingSecondary:
-			return GameConfig::with_margin(config.secondary_timer_ms);
-		default:
-			return 0;
-	}
-}
-
-auto SerializeTiles(const std::vector<mahjong::tile_t>& tiles) -> Json::Value {
-	Json::Value payload(Json::arrayValue);
-	for (mahjong::tile_t tile : tiles) {
-		payload.append(Json::UInt(static_cast<unsigned int>(tile)));
-	}
-	return payload;
-}
-
-auto SerializeMeld(const MeldWrapper& wrapper) -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	payload["tile"] = Json::UInt(static_cast<unsigned int>(wrapper.meld_value.tile()));
-	payload["type"] = std::string(MeldTypeName(wrapper.meld_value.type()));
-	payload["concealed"] = wrapper.meld_value.concealed();
-	payload["chow_mode"] = wrapper.chow_mode;
-	payload["meld_from_rel"] = wrapper.meld_from_rel;
-	return payload;
-}
-
-auto SerializeWinData(const WinData& data) -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	payload["win_fan"] = data.win_fan;
-	payload["win_base_point"] = data.win_base_point;
-	Json::Value fan_codes(Json::arrayValue);
-	for (const auto fan_code : data.win_fan_codes) {
-		fan_codes.append(fan_code.to_string());
-	}
-	payload["win_fan_codes"] = std::move(fan_codes);
-	Json::Value fan_names(Json::arrayValue);
-	for (const auto& fan_name : data.win_fans) {
-		fan_names.append(fan_name);
-	}
-	payload["win_fans"] = std::move(fan_names);
-	return payload;
-}
-
-auto SerializeAvailableActions(const Seat& seat,
-				 PendingStatus pending,
-				 bool include_discard,
-				 int relative_to_target,
-				 std::optional<mahjong::tile_t> reaction_tile = std::nullopt) -> Json::Value {
-	Json::Value actions(Json::arrayValue);
-	if (pending == PendingStatus::kPendingNone || pending == PendingStatus::kPendingSlept) {
-		return actions;
-	}
-
-	auto append_simple = [&actions, reaction_tile](std::string_view kind, bool include_reaction_tile = false) {
-		Json::Value action(Json::objectValue);
-		action["kind"] = std::string(kind);
-		if (include_reaction_tile && reaction_tile.has_value()) {
-			action["tile"] = Json::UInt(static_cast<unsigned int>(*reaction_tile));
-		}
-		actions.append(std::move(action));
-	};
-
-	auto append_tile_action = [&actions](std::string_view kind,
-						   mahjong::tile_t tile,
-						   bool use_drawn_tile) {
-		Json::Value action(Json::objectValue);
-		action["kind"] = std::string(kind);
-		action["tile"] = Json::UInt(static_cast<unsigned int>(tile));
-		action["use_drawn_tile"] = use_drawn_tile;
-		actions.append(std::move(action));
-	};
-
-	if (include_discard) {
-		append_simple("discard_tile");
-		if (seat.avail_melds_self.self_drawn_win) {
-			append_simple("self_drawn_win");
-		}
-		for (mahjong::tile_t tile : seat.avail_melds_self.ckong_from_hand) {
-			append_tile_action("concealed_kong", tile, false);
-		}
-		for (mahjong::tile_t tile : seat.avail_melds_self.ckong_from_draw) {
-			append_tile_action("concealed_kong", tile, true);
-		}
-		for (mahjong::tile_t tile : seat.avail_melds_self.akong_from_hand) {
-			append_tile_action("added_kong", tile, false);
-		}
-		for (mahjong::tile_t tile : seat.avail_melds_self.akong_from_draw) {
-			append_tile_action("added_kong", tile, true);
-		}
-	} else {
-		for (int chow_mode = 1; chow_mode <= 3; ++chow_mode) {
-			if ((seat.avail_melds_other & MeldOpFilter::kChows[chow_mode]) == 0) {
-				continue;
-			}
-			Json::Value action(Json::objectValue);
-			action["kind"] = "chow";
-			action["ui64_value"] = Json::UInt64(static_cast<Json::UInt64>(chow_mode));
-			if (reaction_tile.has_value()) {
-				action["tile"] = Json::UInt(static_cast<unsigned int>(*reaction_tile));
-			}
-			actions.append(std::move(action));
-		}
-		if ((seat.avail_melds_other & MeldOpFilter::kPung) != 0) {
-			append_simple("pung", true);
-		}
-		if ((seat.avail_melds_other & MeldOpFilter::kMeldedKong) != 0) {
-			append_simple("melded_kong", true);
-		}
-		if ((seat.avail_melds_other & MeldOpFilter::kDiscardWin) != 0) {
-			append_simple("discard_win", true);
-		}
-		if ((seat.avail_melds_other & MeldOpFilter::kRobAddedKongWin) != 0) {
-			append_simple("rob_added_kong_win", true);
-		}
-		if (seat.avail_melds_other != 0) {
-			if (relative_to_target != 1 || 
-				(seat.avail_melds_other & MeldOpFilter::kDiscardWin) != 0 ||
-				(seat.avail_melds_other & MeldOpFilter::kRobAddedKongWin) != 0) {
-				append_simple("pass");
-			}
-			append_simple("final_pass");
-		}
-	}
-	return actions;
-}
-
-auto SerializeVisibleEvent(const Event& event,
-					   int viewer_seat,
-					   std::uint64_t stage_counter) -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	payload["kind"] = std::string(EventKindName(event.kind));
-	payload["stage_counter"] = Json::UInt64(stage_counter);
-	payload["actor_seat"] = event.actor_seat;
-	payload["timestamp_ms"] = Json::Int64(event.timestamp_ms);
-
-	auto append_tile = [&payload](mahjong::tile_t tile) {
-		payload["tile"] = Json::UInt(static_cast<unsigned int>(tile));
-	};
-
-	switch (event.kind) {
-		case EventKind::kPredraw: {
-			Json::Value drawn_tiles(Json::arrayValue);
-			for (const auto tile : event.drawn_tiles) {
-				drawn_tiles.append(
-					viewer_seat == event.actor_seat
-						? Json::UInt(static_cast<unsigned int>(tile))
-						: Json::UInt(0));
-			}
-			payload["drawn_tiles"] = std::move(drawn_tiles);
-			if (event.ui64_value.has_value()) {
-				payload["ui64_value"] = Json::UInt64(*event.ui64_value);
-			}
-		} break;
-
-		case EventKind::kDrawTile:
-			if (event.draw_from_back.has_value()) {
-				payload["draw_from_back"] = *event.draw_from_back;
-			}
-			if (viewer_seat == event.actor_seat && event.tile.has_value()) {
-				append_tile(*event.tile);
-			}
-			break;
-
-		case EventKind::kDiscardTile:
-			if (event.tile.has_value()) {
-				append_tile(*event.tile);
-			}
-			if (event.use_drawn_tile.has_value()) {
-				payload["use_drawn_tile"] = *event.use_drawn_tile;
-			}
-			if (event.forced.has_value()) {
-				payload["forced"] = *event.forced;
-			}
-			break;
-
-		case EventKind::kChow:
-			if (event.tile.has_value()) {
-				append_tile(*event.tile);
-			}
-			if (event.ui64_value.has_value()) {
-				payload["ui64_value"] = Json::UInt64(*event.ui64_value);
-			}
-			break;
-
-		case EventKind::kPung:
-		case EventKind::kMeldedKong:
-		case EventKind::kDiscardWin:
-		case EventKind::kRobAddedKongWin:
-		case EventKind::kSelfDrawnWin:
-		case EventKind::kAddedKong:
-		case EventKind::kConcealedKong:
-			if (event.tile.has_value()) {
-				append_tile(*event.tile);
-			}
-			if ((event.kind == EventKind::kAddedKong ||
-				 event.kind == EventKind::kConcealedKong) &&
-				event.use_drawn_tile.has_value()) {
-				payload["use_drawn_tile"] = *event.use_drawn_tile;
-			}
-			break;
-
-		case EventKind::kEnd:
-			break;
-
-		default:
-			break;
-	}
-
-	if (event.win_data.has_value()) {
-		payload["win"] = SerializeWinData(*event.win_data);
-	}
-	if (!event.revealed_hand_tiles.empty()) {
-		payload["revealed_hand_tiles"] = SerializeTiles(event.revealed_hand_tiles);
-	}
-	if (!event.final_scores.empty()) {
-		Json::Value scores(Json::arrayValue);
-		for (const int score : event.final_scores) {
-			scores.append(score);
-		}
-		payload["scores"] = std::move(scores);
-	}
-
-	return payload;
-}
-
-auto MsgOnClaim(const Event& event,
-			 const std::array<Seat, 4>& seats,
-			 const std::array<bool, 4>& interval_delayed_seats,
-			 int meld_offset_ms,
-			 std::int64_t dispatch_now_ms) -> std::array<MsgPolicy, 4> {
-	std::array<MsgPolicy, 4> policies{};
-	const bool apply_interval_delay =
-		event.kind != EventKind::kPlayerLeft && event.kind != EventKind::kPlayerResumed;
-
-	for (int seat = 0; seat < 4; ++seat) {
-		std::int64_t deliver_at_ms = dispatch_now_ms;
-		if (apply_interval_delay && interval_delayed_seats[seat]) {
-			deliver_at_ms += meld_offset_ms;
-		}
-		policies[seat].delay_ms = std::max<int>(
-			0,
-			static_cast<int>(deliver_at_ms - dispatch_now_ms));
-	}
-
-	switch (event.kind) {
-		case EventKind::kChow:
-		case EventKind::kPung:
-		case EventKind::kMeldedKong:
-		case EventKind::kDiscardWin:
-		case EventKind::kRobAddedKongWin:
-			for (int seat = 0; seat < 4; ++seat) {
-				if (seat == event.actor_seat || seats[seat].avail_melds_other == 0) {
-					continue;
-				}
-				if (seats[seat].pending == PendingStatus::kPendingSlept) {
-					continue;
-				}
-				policies[seat].set_pending = PendingStatus::kPendingSecondary;
-			}
-			break;
-
-		default:
-			break;
-	}
-
-	return policies;
-}
-
-auto MsgOnTransition(const Event& transition,
-			      const std::array<Seat, 4>& seats,
-			      const std::array<bool, 4>& interval_delayed_seats,
-			      const std::array<bool, 4>& next_interval_delayed_seats,
-			      const std::optional<Event>& previous_transition,
-			      int current_meld_offset_ms,
-			      int next_meld_offset_ms,
-			      std::int64_t last_claim_event_ms,
-			      std::int64_t dispatch_now_ms,
-			      int random_pause_ms) -> std::array<MsgPolicy, 4> {
-	std::array<MsgPolicy, 4> policies{};
-	const std::int64_t previous_transition_ms =
-		previous_transition.has_value() ? previous_transition->timestamp_ms : 0;
-	const std::int64_t last_interval_event_ms =
-		std::max(previous_transition_ms, last_claim_event_ms);
-
-	for (int seat = 0; seat < 4; ++seat) {
-		std::int64_t deliver_at_ms = dispatch_now_ms;
-		if (IsSyncCheckpoint(transition.kind)) {
-			if (seat != transition.actor_seat && interval_delayed_seats[seat]) {
-				deliver_at_ms = std::max<std::int64_t>(
-					deliver_at_ms,
-					last_interval_event_ms + current_meld_offset_ms + GameConfig::minimal_transition_ms);
-			}
-			if (next_interval_delayed_seats[seat] && seat != transition.actor_seat) {
-				deliver_at_ms += next_meld_offset_ms;
-			}
-			if (seat != transition.actor_seat &&
-				(transition.kind == EventKind::kDiscardTile ||
-				 transition.kind == EventKind::kAddedKong)) {
-				deliver_at_ms += random_pause_ms;
-			}
-		} else if (transition.kind != EventKind::kEnd &&
-			       transition.kind != EventKind::kStart &&
-			       interval_delayed_seats[seat]) {
-			deliver_at_ms += current_meld_offset_ms;
-		}
-
-		policies[seat].delay_ms = std::max<int>(
-			0,
-			static_cast<int>(deliver_at_ms - dispatch_now_ms));
-	}
-
-	switch (transition.kind) {
-		case EventKind::kDrawTile:
-		case EventKind::kChow:
-		case EventKind::kPung:
-			if (!seats[transition.actor_seat].is_afk()) {
-				policies[transition.actor_seat].set_pending = PendingStatus::kPendingPrimary;
-			}
-			break;
-
-		case EventKind::kDiscardTile:
-		case EventKind::kAddedKong:
-			for (int seat = 0; seat < 4; ++seat) {
-				if (seat == transition.actor_seat || seats[seat].avail_melds_other == 0) {
-					continue;
-				}
-				if (seats[seat].is_afk()) {
-					continue;
-				}
-				if (seats[seat].pending == PendingStatus::kPendingSlept) {
-					continue;
-				}
-				if (seat == (transition.actor_seat + 1) % 4) {
-					policies[seat].set_pending = PendingStatus::kPendingPrimary;
-				} else {
-					policies[seat].set_pending = PendingStatus::kPendingSecondary;
-				}
-			}
-			break;
-
-		default:
-			break;
-	}
-
-	return policies;
-}
-
-} // namespace
+// ---------------------------------------------------------------------------
+// Delivery flow
+// ---------------------------------------------------------------------------
 
 void ActiveSession::schedule_pending_start(int seat,
 					   PendingStatus pending,
@@ -2699,218 +1705,6 @@ void ActiveSession::schedule_pending_start(int seat,
 	pending_start_timers_[seat].set(delay_ms, [apply_pending]() mutable {
 		apply_pending();
 	});
-}
-
-auto ActiveSession::build_snapshot_for_player(
-	int seat,
-	const Event* context_event) const -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	payload["phase"] = "active";
-	payload["session_id"] = Json::Int64(session_id_);
-
-	Json::Value state_payload(Json::objectValue);
-	state_payload["round_counter"] = Json::UInt64(state_.round_counter);
-	state_payload["stage_counter"] = Json::UInt64(state_.stage_counter);
-	state_payload["remaining_tile_count"] = Json::UInt64(static_cast<Json::UInt64>(wall_.size()));
-	state_payload["ended"] = ended_;
-	if (ended_) {
-		state_payload["final_scores"] = SerializeScores(final_scores_);
-	} else {
-		state_payload["final_scores"] = Json::Value(Json::nullValue);
-	}
-	auto last_transition = transition_queue_.empty() ? std::nullopt : std::make_optional(transition_queue_.back());
-		if (last_transition.has_value() &&
-			(last_transition->kind == EventKind::kDiscardWin ||
-			 last_transition->kind == EventKind::kRobAddedKongWin) &&
-			transition_queue_.size() >= 2) {
-			state_payload["result_source_actor"] = transition_queue_[transition_queue_.size() - 2].actor_seat;
-		} else {
-			state_payload["result_source_actor"] = Json::Value(Json::nullValue);
-		}
-	if (last_transition.has_value()) {
-		state_payload["last_actor"] = last_transition->actor_seat;
-		state_payload["last_event_kind"] = std::string(EventKindName(last_transition->kind));
-	} else {
-		state_payload["last_actor"] = Json::Value(Json::nullValue);
-		state_payload["last_event_kind"] = Json::Value(Json::nullValue);
-	}
-	state_payload["current_player"] = state_.current_player;
-	payload["state"] = std::move(state_payload);
-
-	Json::Value seats_payload(Json::arrayValue);
-	for (std::size_t index = 0; index < seats_.size(); ++index) {
-		const Seat& current = seats_[index];
-		Json::Value seat_payload(Json::objectValue);
-		seat_payload["seat_index"] = static_cast<int>(index);
-		seat_payload["score"] = current.score;
-		seat_payload["afk"] = current.is_afk();
-		seat_payload["disconnected"] = current.disconnected;
-		seat_payload["hand_tile_count"] = Json::UInt64(current.hand_tiles.size());
-		seat_payload["has_drawn_tile"] = current.has_drawn_tile();
-
-		const auto player = current.player.lock();
-		if (player != nullptr) {
-			seat_payload["player_id"] = Json::Int64(player->player_id);
-			seat_payload["username"] = player->username;
-		} else {
-			seat_payload["player_id"] = Json::Value(Json::nullValue);
-			seat_payload["username"] = Json::Value(Json::nullValue);
-		}
-
-		seat_payload["discard_pile"] = SerializeTiles(current.discard_pile);
-		Json::Value melds(Json::arrayValue);
-		for (const auto& wrapper : current.melds) {
-			melds.append(SerializeMeld(wrapper));
-		}
-		seat_payload["melds"] = std::move(melds);
-
-		if (static_cast<int>(index) == seat) {
-			seat_payload["hand_tiles"] = SerializeTiles(current.hand_tiles);
-			if (current.has_drawn_tile()) {
-				seat_payload["drawn_tile"] =
-					Json::UInt(static_cast<unsigned int>(current.drawn_tile));
-			} else {
-				seat_payload["drawn_tile"] = Json::Value(Json::nullValue);
-			}
-		}
-
-		seats_payload.append(std::move(seat_payload));
-	}
-	payload["seats"] = std::move(seats_payload);
-
-	const PendingStatus pending = ended_ ? PendingStatus::kPendingNone : scheduled_pending_[seat].value_or(seats_[seat].pending);
-	auto decision_timer_ms = [&]() -> std::optional<int> {
-		if (ended_) {
-			return std::nullopt;
-		}
-		if (pending != PendingStatus::kPendingPrimary && pending != PendingStatus::kPendingSecondary) {
-			return std::nullopt;
-		}
-
-		const int total_ms = WaitDurationMs(config_, pending, seats_[seat].auxiliary_ms);
-
-		if (seats_[seat].pending_from_ms <= 0) {
-			return std::max(0, total_ms - GameConfig::network_delay_ms);
-		}
-
-		const auto elapsed_ms = std::max<std::int64_t>(0, now_ms() - seats_[seat].pending_from_ms);
-		return static_cast<int>(std::max<std::int64_t>(0, static_cast<std::int64_t>(total_ms) - elapsed_ms));
-	}();
-	const bool include_discard =
-		!ended_ &&
-		state_.next_transition.has_value() &&
-		state_.next_transition->kind == EventKind::kDiscardTile &&
-		state_.next_transition->actor_seat == seat;
-
-	Json::Value viewer(Json::objectValue);
-	viewer["seat_index"] = seat;
-	viewer["pending"] = std::string(PendingStatusName(pending));
-	if (decision_timer_ms.has_value()) {
-		viewer["decision_timer_ms"] = std::max(0, *decision_timer_ms - GameConfig::network_delay_ms);
-	} else {
-		viewer["decision_timer_ms"] = Json::Value(Json::nullValue);
-	}
-	std::optional<mahjong::tile_t> reaction_tile;
-	int relative_to_target = 0;
-	const Event* reaction_source = nullptr;
-	if (!ended_ && context_event != nullptr &&
-		(context_event->kind == EventKind::kDiscardTile ||
-		 context_event->kind == EventKind::kAddedKong) &&
-		context_event->actor_seat != seat &&
-		context_event->tile.has_value()) {
-		reaction_source = context_event;
-	} else if (!ended_ && !transition_queue_.empty()) {
-		const Event& last_transition = transition_queue_.back();
-		if ((last_transition.kind == EventKind::kDiscardTile ||
-			 last_transition.kind == EventKind::kAddedKong) &&
-			last_transition.actor_seat != seat &&
-			last_transition.tile.has_value()) {
-			reaction_source = &last_transition;
-		}
-	}
-	if (reaction_source != nullptr) {
-		reaction_tile = reaction_source->tile;
-		relative_to_target = (seat - reaction_source->actor_seat + 4) % 4;
-	}
-	if (ended_) {
-		viewer["available_actions"] = Json::Value(Json::arrayValue);
-		viewer["wait_data"] = Json::Value(Json::nullValue);
-	} else {
-		viewer["available_actions"] =
-			SerializeAvailableActions(seats_[seat], pending, include_discard, relative_to_target, reaction_tile);
-		viewer["wait_data"] = SerializeViewerWaitData(seats_, seat);
-	}
-
-	// If a pending-start timer is still counting down for this seat,
-	// tell the frontend the remaining time so it can delay showing
-	// meld options. Only include this in snapshot builds (context_event == nullptr),
-	// not in live game event messages — the timer is for resuming players.
-	if (!ended_ && context_event == nullptr && pending_start_timers_[seat].isRunning()) {
-		viewer["pending_start_timer_remaining_ms"] =
-			Json::Int64(static_cast<Json::Int64>(pending_start_timers_[seat].remainingMs()));
-	} else {
-		viewer["pending_start_timer_remaining_ms"] = Json::Value(Json::nullValue);
-	}
-
-	payload["viewer"] = std::move(viewer);
-	if (last_transition.has_value() &&
-		(last_transition->kind == EventKind::kDiscardWin ||
-		 last_transition->kind == EventKind::kRobAddedKongWin ||
-		 last_transition->kind == EventKind::kSelfDrawnWin ||
-		 last_transition->kind == EventKind::kDrawnGame)) {
-		payload["result_event"] = SerializeVisibleEvent(*last_transition, seat, state_.stage_counter);
-	} else {
-		payload["result_event"] = Json::Value(Json::nullValue);
-	}
-
-	Json::Value ratings_array(Json::arrayValue);
-	for (const auto& r : current_round_ratings_) {
-		ratings_array.append(r.ToJson());
-	}
-	payload["ratings"] = std::move(ratings_array);
-
-	return payload;
-}
-
-auto ActiveSession::build_event_message_for_player(
-	int seat,
-	const Event& event,
-	std::string_view category) const -> Json::Value {
-	Json::Value payload(Json::objectValue);
-	const Json::Value snapshot = build_snapshot_for_player(seat, &event);
-	payload["category"] = std::string(category);
-	payload["event"] = SerializeVisibleEvent(event, seat, state_.stage_counter);
-	if (event.kind == EventKind::kStart || event.kind == EventKind::kEnd) {
-		Json::Value ratings_array(Json::arrayValue);
-		for (const auto& r : current_round_ratings_) {
-			ratings_array.append(r.ToJson());
-		}
-		payload["ratings"] = std::move(ratings_array);
-	}
-	if (event.kind == EventKind::kEnd && !final_round_ratings_.empty()) {
-		Json::Value final_arr(Json::arrayValue);
-		for (const auto& r : final_round_ratings_) {
-			final_arr.append(r.ToJson());
-		}
-		payload["final_ratings"] = std::move(final_arr);
-	}
-	payload["state"] = snapshot["state"];
-	payload["viewer"] = snapshot["viewer"];
-
-	Json::Value seat_status(Json::arrayValue);
-	for (const auto& current : snapshot["seats"]) {
-		Json::Value seat_payload(Json::objectValue);
-		seat_payload["seat_index"] = current["seat_index"];
-		seat_payload["score"] = current["score"];
-		seat_payload["afk"] = current["afk"];
-		seat_payload["disconnected"] = current["disconnected"];
-		seat_payload["username"] = current["username"];
-		seat_payload["hand_tile_count"] = current["hand_tile_count"];
-		seat_payload["has_drawn_tile"] = current["has_drawn_tile"];
-		seat_status.append(std::move(seat_payload));
-	}
-	payload["seat_status"] = std::move(seat_status);
-	return BuildEnvelope("game.event", std::move(payload));
 }
 
 int ActiveSession::get_random_pause() {
@@ -3158,32 +1952,6 @@ void ActiveSession::process_transition(const Event& transition) {
 		next_transition_not_before_ms_ = 0;
 		transition_timer_.stop();
 	}
-}
-
-auto PlayerRatingSnapshot::ToJson() const -> Json::Value {
-	Json::Value json(Json::objectValue);
-	json["player_id"] = Json::Int64(player_id);
-	json["username"] = username;
-	json["mu"] = mu;
-	json["tau"] = tau;
-	json["sigma"] = sigma;
-	json["points"] = points;
-	json["level"] = level;
-	json["total_games"] = Json::Int64(total_games);
-	return json;
-}
-
-auto PlayerRatingSnapshot::FromJson(const Json::Value& json) -> PlayerRatingSnapshot {
-	PlayerRatingSnapshot r;
-	r.player_id = json["player_id"].isInt64() ? json["player_id"].asInt64() : 0;
-	r.username = json["username"].isString() ? json["username"].asString() : "";
-	r.mu = json["mu"].isDouble() ? json["mu"].asDouble() : 0.0;
-	r.tau = json["tau"].isDouble() ? json["tau"].asDouble() : 15.0;
-	r.sigma = json["sigma"].isDouble() ? json["sigma"].asDouble() : 300.0;
-	r.points = json["points"].isDouble() ? json["points"].asDouble() : 0.0;
-	r.level = json["level"].isInt() ? json["level"].asInt() : 0;
-	r.total_games = json["total_games"].isInt64() ? json["total_games"].asInt64() : 0;
-	return r;
 }
 
 }  // namespace mmcr::game

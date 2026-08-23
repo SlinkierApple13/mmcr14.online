@@ -1,5 +1,7 @@
 add_library(mmcr_game_hub STATIC
     hub.cc
+    hub_messages.cc
+    hub_gc.cc
     pending_session.cc)
 
 add_library(mmcr::game_hub ALIAS mmcr_game_hub)

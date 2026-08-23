@@ -384,7 +384,7 @@ TEST(ActiveSessionTest, EndSessionWritesAbortRecordWhenRecorded) {
 		config.recorded = true;
 		SessionHarness harness(&manager, config);
 		StepToFirstDiscard(harness);
-		session_identifier = harness.session.session_identifier_;
+		session_identifier = harness.session.identity_.identifier;
 		harness.session.end_session(12345);
 		harness.stop_timers();
 	}
@@ -474,7 +474,7 @@ TEST(ActiveSessionTest, FinalReplayRecordIncludesEndTransitionAndScores) {
 		config.recorded = true;
 		SessionHarness harness(&manager, config);
 		StepToFirstDiscard(harness);
-		session_identifier = harness.session.session_identifier_;
+		session_identifier = harness.session.identity_.identifier;
 
 		Event end_event;
 		end_event.kind = EventKind::kEnd;

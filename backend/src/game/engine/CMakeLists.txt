@@ -1,5 +1,7 @@
 add_library(mmcr_game_engine STATIC
     session.cc
+    session_recording.cc
+    session_messages.cc
     timer.cc
     wall.cc
     ${PROJECT_SOURCE_DIR}/external/qingque/rules/patterns.cpp

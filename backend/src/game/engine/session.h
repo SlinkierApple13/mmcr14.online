@@ -232,6 +232,35 @@ struct Seat {
     bool disconnected{false};
 };
 
+// Immutable session bookkeeping assigned at construction.
+struct SessionIdentity {
+    std::int64_t id{-1};
+    std::uint64_t init_timestamp_ns{0};
+    std::string identifier;
+};
+
+// Session-level lifecycle flags and results.
+struct SessionLifecycle {
+    bool ended{false};
+    std::int64_t ended_at_ms{0};
+    std::array<int, 4> final_scores{};
+};
+
+// Per-round record-keeping state (replay/stats persistence).
+struct RoundRecording {
+    std::optional<RoundStartSnapshot> start_snapshot;
+    Json::Value initial_seats{Json::arrayValue};
+    std::size_t transition_start_index{0};
+    std::size_t event_start_index{0};
+    std::uint64_t number{0};
+    std::int64_t turn{0};
+    int turn_actor{0};
+    std::array<int, 4> meld_count{};
+    bool saved{true};
+    std::vector<PlayerRatingSnapshot> ratings;
+    std::vector<PlayerRatingSnapshot> final_ratings;
+};
+
 class ActiveSession {
 public:
     ActiveSession(random::SeedContainer* seed_container,
@@ -252,7 +281,7 @@ public:
     }
 
     [[nodiscard]] auto session_id() const noexcept -> std::int64_t {
-        return session_id_;
+        return identity_.id;
     }
 
     [[nodiscard]] auto seats() -> std::array<Seat, 4>& {
@@ -280,11 +309,11 @@ public:
     }
 
     [[nodiscard]] auto ended() const noexcept -> bool {
-        return ended_;
+        return lifecycle_.ended;
     }
 
     [[nodiscard]] auto ended_at_ms() const noexcept -> std::int64_t {
-        return ended_at_ms_;
+        return lifecycle_.ended_at_ms;
     }
 
     [[nodiscard]] auto rounds_played() const noexcept -> std::uint64_t {
@@ -324,24 +353,10 @@ private:
     GameHub* hub_{nullptr};
     storage::GameRecordManager* record_manager_{nullptr};
     SessionEndCallback session_end_callback_;
-    std::int64_t session_id_{-1};
-    std::uint64_t session_init_timestamp_ns_{0};
-    std::string session_identifier_;
-    bool ended_{false};
-    std::int64_t ended_at_ms_{0};
-    std::array<int, 4> final_scores_{};
+    SessionIdentity identity_;
+    SessionLifecycle lifecycle_;
+    RoundRecording recording_;
     std::mt19937_64 random_pause_rng_;
-    std::optional<RoundStartSnapshot> current_round_start_snapshot_;
-    Json::Value current_round_initial_seats_{Json::arrayValue};
-    std::size_t current_round_transition_start_index_{0};
-    std::size_t current_round_event_start_index_{0};
-    std::uint64_t current_round_number_{0};
-    std::int64_t current_round_turn_{0};
-    int current_round_turn_actor_{0};
-    std::array<int, 4> current_round_meld_count_{};
-    bool current_round_saved_{true};
-    std::vector<PlayerRatingSnapshot> current_round_ratings_;
-	std::vector<PlayerRatingSnapshot> final_round_ratings_;
     Timer transition_timer_;
     std::array<Timer, 4> pending_start_timers_{};
 

@@ -1,318 +1,12 @@
-#include "game/hub/hub.h"
+#include "game/hub/hub_internal.h"
 
 #include <algorithm>
-#include <charconv>
-#include <chrono>
 #include <string>
-#include <string_view>
 #include <utility>
 
 #include "game/engine/session.h"
 
 namespace mmcr::game {
-namespace {
-
-auto BuildEnvelope(std::string_view type, Json::Value payload) -> Json::Value {
-    Json::Value envelope(Json::objectValue);
-    envelope["version"] = 1;
-    envelope["type"] = std::string(type);
-    envelope["payload"] = std::move(payload);
-    return envelope;
-}
-
-auto FindMessageType(const Json::Value& message) -> std::optional<std::string> {
-    if (!message.isObject()) {
-        return std::nullopt;
-    }
-
-    const Json::Value& value = message["type"];
-    if (!value.isString()) {
-        return std::nullopt;
-    }
-    return value.asString();
-}
-
-auto FindPayload(const Json::Value& message) -> const Json::Value* {
-    if (!message.isObject()) {
-        return nullptr;
-    }
-
-    const Json::Value& payload = message["payload"];
-    if (!payload.isObject()) {
-        return nullptr;
-    }
-    return &payload;
-}
-
-auto ReadRequiredInt64(const Json::Value& object, std::string_view name)
-    -> util::StatusOr<std::int64_t> {
-    if (!object.isObject()) {
-        return util::Status::InvalidArgument("payload must be a JSON object");
-    }
-
-    const Json::Value& value = object[std::string(name)];
-    if (value.isInt64()) {
-        return value.asInt64();
-    }
-    if (value.isInt()) {
-        return static_cast<std::int64_t>(value.asInt());
-    }
-    if (value.isString()) {
-        std::int64_t parsed_value = 0;
-        const std::string raw_value = value.asString();
-        const auto result = std::from_chars(
-            raw_value.data(), raw_value.data() + raw_value.size(), parsed_value);
-        if (result.ec == std::errc() && result.ptr == raw_value.data() + raw_value.size()) {
-            return parsed_value;
-        }
-    }
-
-    return util::Status::InvalidArgument(std::string(name) + " must be an integer");
-}
-
-auto ReadOptionalInt64(const Json::Value& object, std::string_view name)
-    -> util::StatusOr<std::optional<std::int64_t>> {
-    if (!object.isObject()) {
-        return util::Status::InvalidArgument("payload must be a JSON object");
-    }
-
-    const std::string key(name);
-    if (!object.isMember(key) || object[key].isNull()) {
-        return std::optional<std::int64_t>{};
-    }
-
-    const Json::Value& value = object[key];
-    if (value.isInt64()) {
-        return std::optional<std::int64_t>(value.asInt64());
-    }
-    if (value.isInt()) {
-        return std::optional<std::int64_t>(static_cast<std::int64_t>(value.asInt()));
-    }
-    if (value.isString()) {
-        std::int64_t parsed_value = 0;
-        const std::string raw_value = value.asString();
-        const auto result = std::from_chars(
-            raw_value.data(), raw_value.data() + raw_value.size(), parsed_value);
-        if (result.ec == std::errc() && result.ptr == raw_value.data() + raw_value.size()) {
-            return std::optional<std::int64_t>(parsed_value);
-        }
-    }
-
-    return util::Status::InvalidArgument(std::string(name) + " must be an integer");
-}
-
-auto ReadRequiredBool(const Json::Value& object, std::string_view name) -> util::StatusOr<bool> {
-    if (!object.isObject()) {
-        return util::Status::InvalidArgument("payload must be a JSON object");
-    }
-
-    const Json::Value& value = object[std::string(name)];
-    if (!value.isBool()) {
-        return util::Status::InvalidArgument(std::string(name) + " must be a boolean");
-    }
-    return value.asBool();
-}
-
-auto BuildResumeRequiredEnvelope(std::int64_t session_id) -> Json::Value {
-    Json::Value payload(Json::objectValue);
-    payload["session_id"] = Json::Int64(session_id);
-    return BuildEnvelope("resume.required", std::move(payload));
-}
-
-auto UpsertKnownPlayer(
-    std::unordered_map<std::int64_t, std::shared_ptr<auth::PlayerProfile>>& known_players,
-    const auth::PlayerProfile& player) -> std::shared_ptr<auth::PlayerProfile> {
-    auto& slot = known_players[player.player_id];
-    if (slot == nullptr) {
-        slot = std::make_shared<auth::PlayerProfile>(player);
-    } else {
-        *slot = player;
-    }
-    return slot;
-}
-
-auto BuildPendingSummary(const PendingSession& session) -> PendingSessionSummary {
-    int occupied_seat_count = 0;
-    int ready_seat_count = 0;
-    for (const auto& seat : session.seats()) {
-        if (seat.player.valid()) {
-            ++occupied_seat_count;
-            if (seat.ready) {
-                ++ready_seat_count;
-            }
-        }
-    }
-
-    std::vector<std::string> names;
-    for (const auto& seat : session.seats()) {
-        auto player = seat.player.lock();
-        if (player) {
-            names.push_back(player->username);
-        } else {
-            names.push_back("");
-        }
-    }
-
-    return PendingSessionSummary{
-        .session_id = session.session_id(),
-        .occupied_seat_count = occupied_seat_count,
-        .ready_seat_count = ready_seat_count,
-        .primary_timer_ms = session.game_config().primary_timer_ms,
-        .secondary_timer_ms = session.game_config().secondary_timer_ms,
-        .auxiliary_timer_ms = session.game_config().auxiliary_timer_ms,
-        .round_count = session.game_config().round_count,
-        .recorded = session.game_config().recorded,
-        .debug_mode = session.game_config().debug_mode,
-        .public_session = session.game_config().public_session,
-        .can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
-        .can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
-                     ready_seat_count == static_cast<int>(session.seats().size()),
-        .names = std::move(names),
-    };
-}
-
-auto SerializePendingSummary(const PendingSessionSummary& summary) -> Json::Value {
-    Json::Value payload(Json::objectValue);
-    payload["session_id"] = Json::Int64(summary.session_id);
-    payload["occupied_seat_count"] = summary.occupied_seat_count;
-    payload["ready_seat_count"] = summary.ready_seat_count;
-    payload["primary_timer_ms"] = summary.primary_timer_ms;
-    payload["secondary_timer_ms"] = summary.secondary_timer_ms;
-    payload["auxiliary_timer_ms"] = summary.auxiliary_timer_ms;
-    payload["round_count"] = summary.round_count;
-    payload["recorded"] = summary.recorded;
-    payload["debug_mode"] = summary.debug_mode;
-    payload["public_session"] = summary.public_session;
-    payload["can_join"] = summary.can_join;
-    payload["can_start"] = summary.can_start;
-    Json::Value names(Json::arrayValue);
-    for (const auto& name : summary.names) {
-        names.append(name);
-    }
-    payload["names"] = std::move(names);
-    return payload;
-}
-
-auto SerializePendingSummaryList(const std::vector<PendingSessionSummary>& sessions) -> Json::Value {
-    Json::Value payload(Json::arrayValue);
-    for (const auto& session : sessions) {
-        payload.append(SerializePendingSummary(session));
-    }
-    return payload;
-}
-
-auto SerializeActiveSummaryList(const std::vector<ActiveSessionSummary>& sessions) -> Json::Value {
-    Json::Value payload(Json::arrayValue);
-    for (const auto& session : sessions) {
-        Json::Value entry(Json::objectValue);
-        entry["session_id"] = Json::Int64(session.session_id);
-        entry["primary_timer_ms"] = session.primary_timer_ms;
-        entry["secondary_timer_ms"] = session.secondary_timer_ms;
-        entry["auxiliary_timer_ms"] = session.auxiliary_timer_ms;
-        entry["round_count"] = session.round_count;
-        entry["round_counter"] = Json::UInt64(session.round_counter);
-        entry["recorded"] = session.recorded;
-        entry["debug_mode"] = session.debug_mode;
-        entry["ended"] = session.ended;
-        entry["public_session"] = session.public_session;
-        Json::Value names(Json::arrayValue);
-        for (const auto& name : session.names) {
-            names.append(name);
-        }
-        entry["names"] = std::move(names);
-        payload.append(std::move(entry));
-    }
-    return payload;
-}
-
-auto SerializePendingSeat(const PendingSeat& seat) -> Json::Value {
-    Json::Value payload(Json::objectValue);
-    payload["seat_index"] = seat.seat_index;
-    payload["ready"] = seat.ready;
-    const auto player = seat.player.lock();
-    if (player != nullptr) {
-        payload["player_id"] = Json::Int64(player->player_id);
-        payload["username"] = player->username;
-    } else {
-        payload["player_id"] = Json::Value(Json::nullValue);
-        payload["username"] = Json::Value(Json::nullValue);
-    }
-    return payload;
-}
-
-auto BuildPendingSnapshot(const PendingSession& session) -> PendingSessionSnapshot {
-    return PendingSessionSnapshot{
-        .summary = BuildPendingSummary(session),
-        .seats = session.seats(),
-    };
-}
-
-auto SerializePendingSnapshot(const PendingSessionSnapshot& snapshot) -> Json::Value {
-    Json::Value payload(Json::objectValue);
-    payload["phase"] = "pending";
-    payload["summary"] = SerializePendingSummary(snapshot.summary);
-
-    Json::Value seats(Json::arrayValue);
-    for (const auto& seat : snapshot.seats) {
-        seats.append(SerializePendingSeat(seat));
-    }
-    payload["seats"] = std::move(seats);
-    return payload;
-}
-
-void BroadcastPendingSnapshot(GameHub& hub, const PendingSession& session) {
-    const auto snapshot = BuildPendingSnapshot(session);
-    Json::Value payload = SerializePendingSnapshot(snapshot);
-    
-    // Include ratings for all players in the session
-    std::array<std::int64_t, 4> player_ids{};
-    const auto& seats = session.seats();
-    for (std::size_t i = 0; i < seats.size(); ++i) {
-        const auto player = seats[i].player.lock();
-        player_ids[i] = (player != nullptr) ? player->player_id : 0;
-    }
-    if (auto* transport = hub.transport(); transport != nullptr) {
-        auto ratings = transport->get_player_ratings(player_ids);
-        if (!ratings.empty()) {
-            Json::Value ratings_arr(Json::arrayValue);
-            for (const auto& r : ratings) {
-                ratings_arr.append(r.ToJson());
-            }
-            payload["ratings"] = std::move(ratings_arr);
-        }
-    }
-    
-    const Json::Value envelope = BuildEnvelope("session.snapshot", std::move(payload));
-    for (const auto& seat : snapshot.seats) {
-        const auto player = seat.player.lock();
-        if (player != nullptr) {
-            hub.send_to_player(player->player_id, envelope);
-        }
-    }
-}
-
-auto BuildActiveSummary(const ActiveSession& session) -> ActiveSessionSummary {
-    ActiveSessionSummary summary;
-    summary.session_id = session.session_id();
-    summary.primary_timer_ms = session.config().primary_timer_ms;
-    summary.secondary_timer_ms = session.config().secondary_timer_ms;
-    summary.auxiliary_timer_ms = session.config().auxiliary_timer_ms;
-    summary.round_count = session.config().round_count;
-    summary.round_counter = session.state().round_counter;
-    summary.recorded = session.config().recorded;
-    summary.debug_mode = session.config().debug_mode;
-    summary.ended = session.ended();
-    summary.public_session = session.public_session();
-    for (const auto& seat : session.seats()) {
-        const auto player = seat.player.lock();
-        if (player != nullptr) {
-            summary.names.push_back(player->username);
-        }
-    }
-    return summary;
-}
-
-}  // namespace
 
 GameHub::GameHub(random::SeedContainer* seed_container,
                                  GameTransport* transport,
@@ -338,7 +32,11 @@ void GameHub::notify_session_lists_changed() {
     broadcast_joinable_sessions();
 }
 
-auto GameHub::allocate_session_id_locked() -> util::StatusOr<std::int64_t> {
+// ---------------------------------------------------------------------------
+// Session id allocation
+// ---------------------------------------------------------------------------
+
+util::StatusOr<std::int64_t> GameHub::allocate_session_id_locked() {
     constexpr std::int64_t kMinSessionId = 1;
     constexpr std::int64_t kMaxSessionId = 999999;
     constexpr std::int64_t kSessionIdCount = kMaxSessionId - kMinSessionId + 1;
@@ -360,7 +58,7 @@ auto GameHub::allocate_session_id_locked() -> util::StatusOr<std::int64_t> {
     return util::Status::Internal("failed to allocate a unique session id");
 }
 
-auto GameHub::allocate_unranked_session_id_locked() -> util::StatusOr<std::int64_t> {
+util::StatusOr<std::int64_t> GameHub::allocate_unranked_session_id_locked() {
     constexpr std::int64_t kMinUnrankedId = 1'000'000;
     constexpr std::int64_t kMaxUnrankedId = 9'999'999;
     constexpr std::int64_t kUnrankedIdCount = kMaxUnrankedId - kMinUnrankedId + 1;
@@ -382,8 +80,12 @@ auto GameHub::allocate_unranked_session_id_locked() -> util::StatusOr<std::int64
     return util::Status::Internal("failed to allocate a unique unranked session id");
 }
 
-auto GameHub::create_session(const CreateGameSessionRequest& request)
-    -> util::StatusOr<CreateGameSessionResult> {
+// ---------------------------------------------------------------------------
+// Session lifecycle
+// ---------------------------------------------------------------------------
+
+util::StatusOr<CreateGameSessionResult> GameHub::create_session(
+    const CreateGameSessionRequest& request) {
     if (request.owner.player_id <= 0) {
         return util::Status::InvalidArgument("owner player_id must be positive");
     }
@@ -462,7 +164,7 @@ auto GameHub::create_session(const CreateGameSessionRequest& request)
     return CreateGameSessionResult{session_id};
 }
 
-auto GameHub::list_active_sessions() const -> std::vector<ActiveSessionSummary> {
+std::vector<ActiveSessionSummary> GameHub::list_active_sessions() const {
     std::shared_lock lock(mutex_);
     std::vector<ActiveSessionSummary> sessions;
     sessions.reserve(active_sessions_.size());
@@ -481,7 +183,11 @@ auto GameHub::list_active_sessions() const -> std::vector<ActiveSessionSummary> 
     return sessions;
 }
 
-auto GameHub::connect_player(const ConnectPlayerRequest& request) -> util::Status {
+// ---------------------------------------------------------------------------
+// Player connection management
+// ---------------------------------------------------------------------------
+
+util::Status GameHub::connect_player(const ConnectPlayerRequest& request) {
     if (request.player.player_id <= 0) {
         return util::Status::InvalidArgument("player_id must be positive");
     }
@@ -581,7 +287,7 @@ auto GameHub::connect_player(const ConnectPlayerRequest& request) -> util::Statu
     return util::Status::Ok();
 }
 
-auto GameHub::disconnect_player(const DisconnectPlayerRequest& request) -> util::Status {
+util::Status GameHub::disconnect_player(const DisconnectPlayerRequest& request) {
     PendingSession* pending_session = nullptr;
     ActiveSession* active_session = nullptr;
     {
@@ -625,7 +331,11 @@ auto GameHub::disconnect_player(const DisconnectPlayerRequest& request) -> util:
     return util::Status::Ok();
 }
 
-auto GameHub::handle_message(const RouteGameMessageRequest& request) -> util::Status {
+// ---------------------------------------------------------------------------
+// Message routing
+// ---------------------------------------------------------------------------
+
+util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
     const auto player_id = request.player.player_id();
     if (player_id <= 0) {
         return util::Status::InvalidArgument("player_id must be positive");
@@ -790,7 +500,11 @@ auto GameHub::handle_message(const RouteGameMessageRequest& request) -> util::St
     return util::Status::InvalidArgument("unsupported game message type");
 }
 
-auto GameHub::list_joinable_sessions() const -> std::vector<PendingSessionSummary> {
+// ---------------------------------------------------------------------------
+// Lookups and delivery
+// ---------------------------------------------------------------------------
+
+std::vector<PendingSessionSummary> GameHub::list_joinable_sessions() const {
     std::shared_lock lock(mutex_);
     std::vector<PendingSessionSummary> sessions;
     sessions.reserve(pending_sessions_.size());
@@ -805,8 +519,7 @@ auto GameHub::list_joinable_sessions() const -> std::vector<PendingSessionSummar
     return sessions;
 }
 
-auto GameHub::find_pending_session(std::int64_t session_id) const
-    -> util::StatusOr<const PendingSession*> {
+util::StatusOr<const PendingSession*> GameHub::find_pending_session(std::int64_t session_id) const {
     std::shared_lock lock(mutex_);
     auto it = pending_sessions_.find(session_id);
     if (it == pending_sessions_.end()) {
@@ -815,8 +528,7 @@ auto GameHub::find_pending_session(std::int64_t session_id) const
     return it->second.get();
 }
 
-auto GameHub::find_active_session(std::int64_t session_id) const
-    -> util::StatusOr<const ActiveSession*> {
+util::StatusOr<const ActiveSession*> GameHub::find_active_session(std::int64_t session_id) const {
     std::shared_lock lock(mutex_);
     auto it = active_sessions_.find(session_id);
     if (it == active_sessions_.end()) {
@@ -825,8 +537,8 @@ auto GameHub::find_active_session(std::int64_t session_id) const
     return it->second.get();
 }
 
-auto GameHub::find_player_pending_session_id(std::int64_t player_id) const
-    -> std::optional<std::int64_t> {
+std::optional<std::int64_t> GameHub::find_player_pending_session_id(
+    std::int64_t player_id) const {
     std::shared_lock lock(mutex_);
     auto player_it = player_pending_sessions_.find(player_id);
     if (player_it == player_pending_sessions_.end()) {
@@ -840,8 +552,8 @@ auto GameHub::find_player_pending_session_id(std::int64_t player_id) const
     return player_it->second;
 }
 
-auto GameHub::find_player_active_session_id(std::int64_t player_id) const
-    -> std::optional<std::int64_t> {
+std::optional<std::int64_t> GameHub::find_player_active_session_id(
+    std::int64_t player_id) const {
     std::shared_lock lock(mutex_);
     auto player_it = player_active_sessions_.find(player_id);
     if (player_it == player_active_sessions_.end()) {
@@ -875,8 +587,12 @@ void GameHub::broadcast_to_players(const std::vector<std::int64_t>& player_ids,
     }
 }
 
-auto GameHub::route_pending_message(const RouteGameMessageRequest& request,
-                                    PendingSession& session) -> util::Status {
+// ---------------------------------------------------------------------------
+// Session message routing and activation
+// ---------------------------------------------------------------------------
+
+util::Status GameHub::route_pending_message(const RouteGameMessageRequest& request,
+                                    PendingSession& session) {
     const auto message_type = FindMessageType(request.message);
     if (!message_type.has_value()) {
         return util::Status::InvalidArgument("message type is required");
@@ -911,12 +627,12 @@ auto GameHub::route_pending_message(const RouteGameMessageRequest& request,
     return util::Status::Ok();
 }
 
-auto GameHub::route_active_message(const RouteGameMessageRequest& request,
-                                   ActiveSession& session) -> util::Status {
+util::Status GameHub::route_active_message(const RouteGameMessageRequest& request,
+                                   ActiveSession& session) {
     return session.handle_message(request.player.player_id(), request.message);
 }
 
-auto GameHub::start_active_session(std::int64_t session_id) -> util::Status {
+util::Status GameHub::start_active_session(std::int64_t session_id) {
     std::array<auth::PlayerProfilePtr, 4> players;
     GameConfig game_config;
 
@@ -980,208 +696,6 @@ auto GameHub::start_active_session(std::int64_t session_id) -> util::Status {
 
     broadcast_joinable_sessions();
     return util::Status::Ok();
-}
-
-void GameHub::garbage_collect_loop() {
-    std::unique_lock lock(gc_mutex_);
-    while (!gc_shutdown_) {
-        gc_cv_.wait_for(lock, std::chrono::seconds(1), [this] {
-            return gc_shutdown_;
-        });
-        if (gc_shutdown_) {
-            return;
-        }
-
-        lock.unlock();
-        garbage_collect_active_sessions();
-        garbage_collect_pending_sessions();
-        lock.lock();
-    }
-}
-
-void GameHub::garbage_collect_active_sessions() {
-    const auto now_ms = static_cast<std::int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count());
-
-    std::vector<std::int64_t> expired_session_ids;
-    std::vector<std::int64_t> removed_player_ids;
-    bool sessions_changed = false;
-    {
-        std::unique_lock lock(mutex_);
-        for (const auto& [session_id, session] : active_sessions_) {
-            if (session == nullptr) {
-                continue;
-            }
-
-            if (session->ended()) {
-                active_session_all_afk_since_ms_.erase(session_id);
-                if (now_ms - session->ended_at_ms() >= GameConfig::dead_time) {
-                    expired_session_ids.push_back(session_id);
-                    for (const auto& seat : session->seats()) {
-                        const auto player = seat.player.lock();
-                        if (player != nullptr && player->player_id > 0) {
-                            removed_player_ids.push_back(player->player_id);
-                        }
-                    }
-                }
-                continue;
-            }
-
-            bool all_afk = true;
-            for (const auto& seat : session->seats()) {
-                if (!seat.is_afk() && !seat.disconnected) {
-                    all_afk = false;
-                    break;
-                }
-            }
-
-            if (!all_afk) {
-                active_session_all_afk_since_ms_.erase(session_id);
-                continue;
-            }
-
-            auto& since_ms = active_session_all_afk_since_ms_[session_id];
-            if (since_ms == 0) {
-                since_ms = now_ms;
-                continue;
-            }
-
-            if (now_ms - since_ms < GameConfig::afk_tolerance_ms) {
-                continue;
-            }
-
-            session->end_session(now_ms);
-            active_session_all_afk_since_ms_.erase(session_id);
-            sessions_changed = true;
-        }
-
-        for (const auto session_id : expired_session_ids) {
-            active_sessions_.erase(session_id);
-            active_session_all_afk_since_ms_.erase(session_id);
-        }
-        for (auto it = player_active_sessions_.begin(); it != player_active_sessions_.end();) {
-            if (std::find(expired_session_ids.begin(), expired_session_ids.end(), it->second) != expired_session_ids.end()) {
-                it = player_active_sessions_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        for (const auto player_id : removed_player_ids) {
-            browsing_players_.insert(player_id);
-        }
-    }
-
-    if (sessions_changed || !expired_session_ids.empty()) {
-        broadcast_joinable_sessions();
-    }
-}
-
-void GameHub::garbage_collect_pending_sessions() {
-    std::vector<std::int64_t> removed_player_ids;
-    std::vector<std::int64_t> changed_session_ids;
-    std::vector<std::int64_t> expired_session_ids;
-
-    {
-        std::shared_lock lock(mutex_);
-        for (const auto& [session_id, session] : pending_sessions_) {
-            auto invalid_players = session->collect_invalid_players();
-            if (!invalid_players.empty()) {
-                removed_player_ids.insert(
-                    removed_player_ids.end(), invalid_players.begin(), invalid_players.end());
-                changed_session_ids.push_back(session_id);
-            }
-
-            if (session->is_empty()) {
-                session->ensure_empty_timer();
-                if (session->empty_timeout_elapsed()) {
-                    expired_session_ids.push_back(session_id);
-                }
-                continue;
-            }
-
-            session->reset_empty_timer();
-        }
-    }
-
-    if (!removed_player_ids.empty()) {
-        std::unique_lock lock(mutex_);
-        for (const auto player_id : removed_player_ids) {
-            auto it = player_pending_sessions_.find(player_id);
-            if (it != player_pending_sessions_.end()) {
-                player_pending_sessions_.erase(it);
-            }
-        }
-    }
-
-    bool removed_any_session = false;
-    for (const auto session_id : expired_session_ids) {
-        std::unique_lock lock(mutex_);
-        auto it = pending_sessions_.find(session_id);
-        if (it == pending_sessions_.end()) {
-            continue;
-        }
-        if (!it->second->is_empty() || !it->second->empty_timeout_elapsed()) {
-            continue;
-        }
-
-        for (auto pending_it = player_pending_sessions_.begin(); pending_it != player_pending_sessions_.end();) {
-            if (pending_it->second == session_id) {
-                pending_it = player_pending_sessions_.erase(pending_it);
-            } else {
-                ++pending_it;
-            }
-        }
-        pending_sessions_.erase(it);
-        removed_any_session = true;
-    }
-
-    for (const auto session_id : changed_session_ids) {
-        std::shared_lock lock(mutex_);
-        auto it = pending_sessions_.find(session_id);
-        if (it == pending_sessions_.end()) {
-            continue;
-        }
-        PendingSession* session = it->second.get();
-        lock.unlock();
-        BroadcastPendingSnapshot(*this, *session);
-    }
-
-    if (!removed_player_ids.empty() || removed_any_session) {
-        broadcast_joinable_sessions();
-    }
-}
-
-void GameHub::broadcast_joinable_sessions() {
-    auto all_sessions = list_joinable_sessions();
-    const auto active_sessions = list_active_sessions();
-
-    // Only broadcast public sessions to browsing players. Players who join a
-    // non-public session will see it via the game WS path, not via the lobby.
-    std::vector<PendingSessionSummary> sessions;
-    sessions.reserve(all_sessions.size());
-    for (const auto& s : all_sessions) {
-        if (s.public_session) {
-            sessions.push_back(s);
-        }
-    }
-
-    Json::Value payload(Json::objectValue);
-    payload["sessions"] = SerializePendingSummaryList(sessions);
-    payload["active_sessions"] = SerializeActiveSummaryList(active_sessions);
-    const Json::Value envelope = BuildEnvelope("lobby.list.snapshot", std::move(payload));
-
-    std::vector<std::int64_t> browsing_players;
-    {
-        std::shared_lock lock(mutex_);
-        browsing_players.reserve(browsing_players_.size());
-        for (const auto player_id : browsing_players_) {
-            browsing_players.push_back(player_id);
-        }
-    }
-
-    broadcast_to_players(browsing_players, envelope);
 }
 
 }  // namespace mmcr::game
