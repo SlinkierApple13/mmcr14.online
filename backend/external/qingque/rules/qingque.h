@@ -1,8 +1,8 @@
 #pragma once
 
+#include <array>
 #include <bitset>
 #include <cstdint>
-#include <initializer_list>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,16 +18,16 @@ namespace qingque {
         extern unsigned long long nine_gates_m_s;
         extern unsigned long long nine_gates_p;
 
-        extern std::initializer_list<std::initializer_list<meld_t>> mixed_shifted_triplets;
-        extern std::initializer_list<std::initializer_list<meld_t>> mixed_shifted_sequences;
-        extern std::initializer_list<std::initializer_list<meld_t>> mixed_chained_sequences;
-        extern std::initializer_list<std::initializer_list<meld_t>> mixed_straight;
-        extern std::initializer_list<std::initializer_list<meld_t>> mirrored_short_straights;
+        extern const std::array<std::array<mahjong::meld_t, 3>, 42> mixed_shifted_triplets;
+        extern const std::array<std::array<mahjong::meld_t, 3>, 30> mixed_shifted_sequences;
+        extern const std::array<std::array<mahjong::meld_t, 3>, 18> mixed_chained_sequences;
+        extern const std::array<std::array<mahjong::meld_t, 3>, 6> mixed_straight;
+        extern const std::array<std::array<mahjong::meld_t, 4>, 15> mirrored_short_straights;
 
         extern unsigned long long knitted_tiles;
         extern unsigned long long honours;
 
-        extern std::initializer_list<tile_counter> honours_and_knitted_tiles;
+        extern const std::array<mahjong::tile_counter, 6> honours_and_knitted_tiles;
     }
 
     struct tag {
@@ -43,15 +43,10 @@ namespace qingque {
     using fan = scoring_element<uint8_t, tag>;
     using fan_code = std::bitset<code_size>;
 
-    extern verifier is_seven_pairs;
-    extern verifier is_thirteen_orphans;
-    extern verifier input_verifier;
-    extern verifier is_winning_hand;
-
-    namespace criteria {
-        using res_t = uint8_t;
-        using res_v = std::vector<uint8_t>;
-    }
+    extern mahjong::verifier is_seven_pairs;
+    extern mahjong::verifier is_thirteen_orphans;
+    extern mahjong::verifier input_verifier;
+    extern mahjong::verifier is_winning_hand;
 
     extern const std::vector<fan> fans;
 
@@ -148,16 +143,16 @@ namespace qingque {
         two_short_straights
     };
 
-    std::vector<fan_code> evaluate_fans(const hand& h, bool ignore_occ = false);
+    std::vector<fan_code> evaluate_fans(const mahjong::hand& h, bool ignore_occ = false);
     unsigned long long get_weight(const w_data& data, const fan_code& res);
-    std::pair<unsigned long long, fan_code> get_weight(const w_data& data, const hand& h);
+    std::pair<unsigned long long, fan_code> get_weight(const w_data& data, const mahjong::hand& h);
     double get_fan(const w_data& data, const fan_code& res);
-    std::pair<double, fan_code> get_fan(const w_data& data, const hand& h);
-    fan_code derepellenise(const fan_code& res);
-    fan_code derepellenise2(const fan_code& res);
-    std::vector<fan_code> derepellenise(const std::vector<fan_code>& res);
-    std::vector<fan_code> derepellenise2(const std::vector<fan_code>& res);
-    bool has_fan(const hand& h);
-    std::unordered_map<tile_t, std::unordered_map<tile_t, std::pair<double, double>>> get_all_waits(const w_data& data, const hand& h);
+    std::pair<double, fan_code> get_fan(const w_data& data, const mahjong::hand& h);
+    fan_code dedupe(const fan_code& res);
+    fan_code dedupe2(const fan_code& res);
+    std::vector<fan_code> dedupe(const std::vector<fan_code>& res);
+    std::vector<fan_code> dedupe2(const std::vector<fan_code>& res);
+    bool has_fan(const mahjong::hand& h);
+    std::unordered_map<mahjong::tile_t, std::unordered_map<mahjong::tile_t, std::pair<double, double>>> get_all_waits(const w_data& data, const mahjong::hand& h);
 
 } // namespace qingque

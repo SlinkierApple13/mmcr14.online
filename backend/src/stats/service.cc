@@ -522,7 +522,7 @@ void RoundCollection::add_round(const RoundEntry* entry) {
             fan_stats_precise[result].occurrences.push_back(entry);
         }
 
-        const auto deduplicated = qingque::derepellenise2(entry->fan_results);
+        const auto deduplicated = qingque::dedupe2(entry->fan_results);
         std::unordered_set<qingque::fan_code, FanCodeHash> no_superior_results;
         for (const auto& fan_result : deduplicated) {
             std::queue<std::pair<qingque::fan_code, int>> to_process;
@@ -662,7 +662,7 @@ auto RoundCollection::fan_composition_stats(bool exclude_superior_fans) const
     std::vector<FanCompositionStat> stats;
     const auto& source = exclude_superior_fans ? fan_stats_no_superior : fan_stats;
     for (const auto& [fan_code, precise] : fan_stats_precise) {
-        const auto readable = qingque::derepellenise(fan_code);
+        const auto readable = qingque::dedupe(fan_code);
         std::string fan_names;
         bool first = true;
         for (std::size_t index = 1; index < qingque::fans.size(); ++index) {
@@ -681,7 +681,7 @@ auto RoundCollection::fan_composition_stats(bool exclude_superior_fans) const
 
         const double fan_value = precise.fan();
         const std::uint64_t fan_pt = static_cast<std::uint64_t>(std::round(fan_value * fan_value)) * 3;
-        qingque::fan_code inclusive_code = exclude_superior_fans ? qingque::derepellenise2(fan_code) : fan_code;
+        qingque::fan_code inclusive_code = exclude_superior_fans ? qingque::dedupe2(fan_code) : fan_code;
         const auto inclusive_it = source.find(inclusive_code);
 
         stats.push_back(FanCompositionStat{
@@ -758,7 +758,7 @@ auto RoundCollection::FanCompositionStatsJson(bool exclude_superior_fans) const 
 
     Json::Value arr(Json::arrayValue);
     for (const auto& [fan_code, precise] : fan_stats_precise) {
-        const auto readable = qingque::derepellenise(fan_code);
+        const auto readable = qingque::dedupe(fan_code);
         std::string fan_names;
         bool first = true;
         for (std::size_t i = 1; i < qingque::fans.size(); ++i) {
@@ -785,7 +785,7 @@ auto RoundCollection::FanCompositionStatsJson(bool exclude_superior_fans) const 
         comp_json["exact_count"] = static_cast<Json::UInt64>(precise.occurrences.size());
 
         std::size_t inclusive_count = 0;
-        const auto fan_code_to_use = exclude_superior_fans ? qingque::derepellenise2(fan_code) : fan_code;
+        const auto fan_code_to_use = exclude_superior_fans ? qingque::dedupe2(fan_code) : fan_code;
         const auto inclusive_it = fan_stats_to_use.find(fan_code_to_use);
         if (inclusive_it != fan_stats_to_use.end()) {
             inclusive_count = inclusive_it->second.occurrences.size();
@@ -813,7 +813,7 @@ auto StatsFilter::matches(const RoundEntry& entry) const -> bool {
     }
 
     const auto fan_results_to_check = exclude_superior_fans
-        ? qingque::derepellenise2(entry.fan_results)
+        ? qingque::dedupe2(entry.fan_results)
         : entry.fan_results;
 
     if (!fan_filter_positive.empty()) {

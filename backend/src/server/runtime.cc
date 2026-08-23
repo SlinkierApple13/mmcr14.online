@@ -538,7 +538,7 @@ auto EvaluateCalculatorExpression(std::string_view expression) -> std::string {
 		}
 
 		const auto [fan, fan_code] = qingque::get_fan(qingque_wd::get_wd(), hand);
-		const auto readable_fan_code = qingque::derepellenise(fan_code);
+		const auto readable_fan_code = qingque::dedupe(fan_code);
 
 		std::ostringstream stream;
 		bool first_fan = true;
@@ -1616,7 +1616,7 @@ auto SerializeStatsRoundEntriesPayload(const std::vector<const stats::RoundEntry
 
 		if (!round_entry->fan_results.empty()) {
 			auto res0 = round_entry->fan_results.front();
-			res0 = qingque::derepellenise(res0);
+			res0 = qingque::dedupe(res0);
 			std::string fans_readable;
 			bool first = true;
 			for (std::size_t j = 0; j < qingque::fans.size(); ++j) {
@@ -4077,7 +4077,7 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
 
 				if (!round_entry->fan_ids.empty()) {
 					std::string fans_str;
-					auto fan_code = qingque::derepellenise(round_entry->fan_results[0]);
+					auto fan_code = qingque::dedupe(round_entry->fan_results[0]);
 					for (std::size_t j = 0, cnt = 0; j < round_entry->fan_ids.size(); ++j) {
 						if (!fan_code[round_entry->fan_ids[j]]) {
 							continue;

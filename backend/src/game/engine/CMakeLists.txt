@@ -2,7 +2,12 @@ add_library(mmcr_game_engine STATIC
     session.cc
     timer.cc
     wall.cc
-    ${PROJECT_SOURCE_DIR}/external/qingque/rules/qingque.cpp
+    ${PROJECT_SOURCE_DIR}/external/qingque/rules/patterns.cpp
+    ${PROJECT_SOURCE_DIR}/external/qingque/rules/verifiers.cpp
+    ${PROJECT_SOURCE_DIR}/external/qingque/rules/criteria.cpp
+    ${PROJECT_SOURCE_DIR}/external/qingque/rules/scoring.cpp
+    ${PROJECT_SOURCE_DIR}/external/qingque/rules/dedup.cpp
+    ${PROJECT_SOURCE_DIR}/external/qingque/rules/waits.cpp
     ${PROJECT_SOURCE_DIR}/external/qingque/rules/qingque_data.cpp
     ${PROJECT_SOURCE_DIR}/external/qingque/rules/w_data.cpp)
 

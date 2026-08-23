@@ -307,9 +307,9 @@ auto BuildWinData(const mahjong::hand& h) -> WinData {
 			  [](const auto& a, const auto& b) { return a.first > b.first; });
 	if (!fan_code_fan_pairs.empty()) {
 		data.win_fan = fan_code_fan_pairs[0].first;
-		const auto derepellenised = qingque::derepellenise(fan_code_fan_pairs[0].second);
+		const auto deduped = qingque::dedupe(fan_code_fan_pairs[0].second);
 		for (std::size_t index = 0; index < qingque::fans.size(); ++index) {
-			if (!derepellenised.test(index)) {
+			if (!deduped.test(index)) {
 				continue;
 			}
 			data.win_fans.push_back(qingque::fans[index].name);
