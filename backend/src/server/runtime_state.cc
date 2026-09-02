@@ -66,6 +66,19 @@ void GameSocketHub::SendToPlayer(std::int64_t player_id, const Json::Value& mess
 	}
 }
 
+void GameSocketHub::SendToSpectators(std::int64_t session_id,
+								 const Json::Value& message,
+								 int delay_ms) {
+	for (const auto& connection : LiveConnectionsForPlayer(session_id, WebSocketRoute::kSpectate)) {
+		SendLoggedWebSocketJson(
+			logger_, connection, message, delay_ms, std::nullopt, WebSocketRoute::kSpectate);
+	}
+}
+
+bool GameSocketHub::HasLiveConnection(std::int64_t player_id, WebSocketRoute route) {
+	return !LiveConnectionsForPlayer(player_id, route).empty();
+}
+
 void GameSocketHub::EvictPlayerFromRoute(std::int64_t player_id, WebSocketRoute route,
 			  DebugTrafficLogger* logger,
 			  const drogon::WebSocketConnection* keep_connection) {
@@ -538,6 +551,12 @@ void ServerState::send_to_player(std::int64_t player_id,
 		   const Json::Value& message,
 		   int delay_ms) {
 	socket_hub_.SendToPlayer(player_id, message, delay_ms);
+}
+
+void ServerState::send_to_spectators(std::int64_t session_id,
+								 const Json::Value& message,
+								 int delay_ms) {
+	socket_hub_.SendToSpectators(session_id, message, delay_ms);
 }
 
 void ServerState::on_session_ended(std::int64_t session_id,

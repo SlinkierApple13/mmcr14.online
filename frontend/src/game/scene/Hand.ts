@@ -84,8 +84,9 @@ export class Hand extends Container {
       idx = this.rightList.findIndex((t) => t.tid === tid)
     }
 
-    if (idx < 0 && this.direction !== 0) {
-      // randomly pick one from all not shown tiles in hand
+    if (idx < 0) {
+      // Hidden hands do not carry tile identities. Remove one concealed tile
+      // when a public discard or meld identifies what left the hand.
       const candidates = this.rightList.filter((t) => !t.shown)
       if (candidates.length > 0) {
         idx = this.rightList.indexOf(candidates[Math.floor(Math.random() * candidates.length)])
@@ -349,6 +350,41 @@ export class Hand extends Container {
       } else {
         this.drawnTile.updateTid(drawnTile)
         this.drawnTile.show()
+      }
+    } else if (this.drawnTile) {
+      this.drawnTile.removeFromParent()
+      this.drawnTile.destroy({ children: true })
+      this.drawnTile = null
+    }
+
+    this.updateDisplay(false, false, false, false, false)
+  }
+
+  concealHand(tileCount: number, hasDrawnTile: boolean): void {
+    this.discardIndex = -1
+    while (this.rightList.length > tileCount) {
+      const extra = this.rightList.pop()
+      if (!extra) break
+      extra.removeFromParent()
+      extra.destroy({ children: true })
+    }
+    while (this.rightList.length < tileCount) {
+      this.addRightList(Tile.newInvisible(0))
+    }
+    for (const tile of this.rightList) {
+      tile.updateTid(0)
+      tile.hide()
+    }
+
+    if (hasDrawnTile) {
+      if (!this.drawnTile) {
+        const tile = Tile.newInvisible(0)
+        tile.hide()
+        this.applyTileStyle(tile)
+        this.drawnTile = tile
+      } else {
+        this.drawnTile.updateTid(0)
+        this.drawnTile.hide()
       }
     } else if (this.drawnTile) {
       this.drawnTile.removeFromParent()

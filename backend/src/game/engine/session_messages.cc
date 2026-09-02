@@ -483,6 +483,15 @@ Json::Value SerializeVisibleEvent(const Event& event,
 	return payload;
 }
 
+Json::Value SerializeSpectatorEvent(const Event& event, std::uint64_t stage_counter) {
+	Json::Value payload = SerializeVisibleEvent(event, -1, stage_counter);
+	payload.removeMember("revealed_hand_tiles");
+	if (event.kind == EventKind::kSelfDrawnWin) {
+		payload.removeMember("tile");
+	}
+	return payload;
+}
+
 std::array<MsgPolicy, 4> MsgOnClaim(const Event& event,
 			 const std::array<Seat, 4>& seats,
 			 const std::array<bool, 4>& interval_delayed_seats,
@@ -608,9 +617,11 @@ std::array<MsgPolicy, 4> MsgOnTransition(const Event& transition,
 auto ActiveSession::build_snapshot_for_player(
 	int seat,
 	const Event* context_event) const -> Json::Value {
+	const bool spectator = seat < 0;
 	Json::Value payload(Json::objectValue);
 	payload["phase"] = "active";
 	payload["session_id"] = Json::Int64(identity_.id);
+	payload["spectator"] = spectator;
 
 	Json::Value state_payload(Json::objectValue);
 	state_payload["round_counter"] = Json::UInt64(state_.round_counter);
@@ -668,7 +679,7 @@ auto ActiveSession::build_snapshot_for_player(
 		}
 		seat_payload["melds"] = std::move(melds);
 
-		if (static_cast<int>(index) == seat) {
+		if (!spectator && static_cast<int>(index) == seat) {
 			seat_payload["hand_tiles"] = SerializeTiles(current.hand_tiles);
 			if (current.has_drawn_tile()) {
 				seat_payload["drawn_tile"] =
@@ -682,9 +693,12 @@ auto ActiveSession::build_snapshot_for_player(
 	}
 	payload["seats"] = std::move(seats_payload);
 
-	const PendingStatus pending = lifecycle_.ended ? PendingStatus::kPendingNone : scheduled_pending_[seat].value_or(seats_[seat].pending);
+	const PendingStatus pending =
+		(spectator || lifecycle_.ended)
+			? PendingStatus::kPendingNone
+			: scheduled_pending_[seat].value_or(seats_[seat].pending);
 	auto decision_timer_ms = [&]() -> std::optional<int> {
-		if (lifecycle_.ended) {
+		if (spectator || lifecycle_.ended) {
 			return std::nullopt;
 		}
 		if (pending != PendingStatus::kPendingPrimary && pending != PendingStatus::kPendingSecondary) {
@@ -701,13 +715,14 @@ auto ActiveSession::build_snapshot_for_player(
 		return static_cast<int>(std::max<std::int64_t>(0, static_cast<std::int64_t>(total_ms) - elapsed_ms));
 	}();
 	const bool include_discard =
-		!lifecycle_.ended &&
+		!spectator && !lifecycle_.ended &&
 		state_.next_transition.has_value() &&
 		state_.next_transition->kind == EventKind::kDiscardTile &&
 		state_.next_transition->actor_seat == seat;
 
 	Json::Value viewer(Json::objectValue);
-	viewer["seat_index"] = seat;
+	viewer["seat_index"] = spectator ? 0 : seat;
+	viewer["spectator"] = spectator;
 	viewer["pending"] = std::string(PendingStatusName(pending));
 	if (decision_timer_ms.has_value()) {
 		viewer["decision_timer_ms"] = std::max(0, *decision_timer_ms - GameConfig::network_delay_ms);
@@ -736,7 +751,7 @@ auto ActiveSession::build_snapshot_for_player(
 		reaction_tile = reaction_source->tile;
 		relative_to_target = (seat - reaction_source->actor_seat + 4) % 4;
 	}
-	if (lifecycle_.ended) {
+	if (spectator || lifecycle_.ended) {
 		viewer["available_actions"] = Json::Value(Json::arrayValue);
 		viewer["wait_data"] = Json::Value(Json::nullValue);
 	} else {
@@ -749,7 +764,8 @@ auto ActiveSession::build_snapshot_for_player(
 	// tell the frontend the remaining time so it can delay showing
 	// meld options. Only include this in snapshot builds (context_event == nullptr),
 	// not in live game event messages — the timer is for resuming players.
-	if (!lifecycle_.ended && context_event == nullptr && pending_start_timers_[seat].isRunning()) {
+	if (!spectator && !lifecycle_.ended && context_event == nullptr &&
+		pending_start_timers_[seat].isRunning()) {
 		viewer["pending_start_timer_remaining_ms"] =
 			Json::Int64(static_cast<Json::Int64>(pending_start_timers_[seat].remainingMs()));
 	} else {
@@ -762,7 +778,9 @@ auto ActiveSession::build_snapshot_for_player(
 		 last_transition->kind == EventKind::kRobAddedKongWin ||
 		 last_transition->kind == EventKind::kSelfDrawnWin ||
 		 last_transition->kind == EventKind::kDrawnGame)) {
-		payload["result_event"] = SerializeVisibleEvent(*last_transition, seat, state_.stage_counter);
+		payload["result_event"] = spectator
+			? SerializeSpectatorEvent(*last_transition, state_.stage_counter)
+			: SerializeVisibleEvent(*last_transition, seat, state_.stage_counter);
 	} else {
 		payload["result_event"] = Json::Value(Json::nullValue);
 	}
@@ -773,6 +791,27 @@ auto ActiveSession::build_snapshot_for_player(
 	}
 	payload["ratings"] = std::move(ratings_array);
 
+	return payload;
+}
+
+auto ActiveSession::build_spectator_hand_payload(int seat) const
+	-> util::StatusOr<Json::Value> {
+	std::lock_guard lock(state_.mutex);
+	if (seat < 0 || seat >= static_cast<int>(seats_.size())) {
+		return util::Status::InvalidArgument("invalid spectator hand seat");
+	}
+
+	const Seat& target = seats_[seat];
+	Json::Value payload(Json::objectValue);
+	payload["session_id"] = Json::Int64(identity_.id);
+	payload["seat_index"] = seat;
+	payload["stage_counter"] = Json::UInt64(state_.stage_counter);
+	payload["hand_tiles"] = SerializeTiles(target.hand_tiles);
+	if (target.has_drawn_tile()) {
+		payload["drawn_tile"] = static_cast<Json::UInt>(target.drawn_tile);
+	} else {
+		payload["drawn_tile"] = Json::Value(Json::nullValue);
+	}
 	return payload;
 }
 
@@ -815,6 +854,15 @@ auto ActiveSession::build_event_message_for_player(
 	}
 	payload["seat_status"] = std::move(seat_status);
 	return BuildEnvelope("game.event", std::move(payload));
+}
+
+auto ActiveSession::build_event_message_for_spectator(
+	const Event& event,
+	std::string_view category) const -> Json::Value {
+	Json::Value message = build_event_message_for_player(-1, event, category);
+	message["payload"]["event"] = SerializeSpectatorEvent(event, state_.stage_counter);
+	message["payload"]["spectator"] = true;
+	return message;
 }
 
 auto PlayerRatingSnapshot::ToJson() const -> Json::Value {

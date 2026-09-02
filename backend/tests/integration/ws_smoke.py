@@ -56,9 +56,9 @@ class JsonHttpClient:
 
 
 class WebSocketClient:
-    def __init__(self, url, token, use_query_token=False):
+    def __init__(self, url, token=None, use_query_token=False):
         parsed_url = urllib.parse.urlparse(url)
-        if use_query_token:
+        if use_query_token and token:
             query_pairs = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
             query_pairs.append(("access_token", token))
             url = parsed_url._replace(query=urllib.parse.urlencode(query_pairs)).geturl()
@@ -82,7 +82,7 @@ class WebSocketClient:
             "",
             "",
         ]
-        if not use_query_token:
+        if not use_query_token and token:
             headers.insert(6, f"Authorization: Bearer {token}")
         self._socket.sendall("\r\n".join(headers).encode("utf-8"))
 
@@ -305,6 +305,8 @@ def main():
                     WebSocketClient(f"ws://{args.host}:{args.port}/ws/game", token)
                     for token in tokens[:4]
                 ]
+                spectator_ws = None
+                denied_spectator_ws = None
 
                 try:
                     initial_lobby_message, _ = lobby_ws.expect_json(
@@ -449,7 +451,178 @@ def main():
                         f"lobby update should stay immediate relative to game delay: lobby={lobby_elapsed_ms:.1f}ms delay={args.network_delay_ms}ms",
                     )
 
+                    spectator_ws = WebSocketClient(
+                        f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}"
+                    )
+                    spectator_snapshot, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "session.snapshot",
+                        2.0,
+                        "spectator snapshot",
+                    )
+                    spectator_payload = spectator_snapshot.get("payload", {})
+                    assert_true(
+                        spectator_payload.get("spectator") is True,
+                        f"spectator marker missing: {spectator_snapshot}",
+                    )
+                    for seat in spectator_payload.get("seats", []):
+                        assert_true("hand_tiles" not in seat, f"spectator received concealed hand tiles: {seat}")
+                        assert_true("drawn_tile" not in seat, f"spectator received a concealed draw: {seat}")
+                    viewer = spectator_payload.get("viewer", {})
+                    assert_true(viewer.get("available_actions") == [], f"spectator received actions: {viewer}")
+                    assert_true(viewer.get("wait_data") is None, f"spectator received wait data: {viewer}")
+
+                    spectator_ws.send_json(
+                        {"type": "game.input", "requestId": "spectator-write", "payload": {}}
+                    )
+                    spectator_error, _ = spectator_ws.expect_json(
+                        lambda message: message.get("requestId") == "spectator-write",
+                        2.0,
+                        "spectator read-only rejection",
+                    )
+                    assert_true(
+                        spectator_error.get("payload", {}).get("code") == "spectator_read_only",
+                        f"unexpected spectator write response: {spectator_error}",
+                    )
+
+                    spectator_ws.send_json(
+                        {
+                            "type": "spectator.hand.request",
+                            "requestId": "request-seat-zero",
+                            "payload": {"seat_index": 0},
+                        }
+                    )
+                    pending_hand, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.pending",
+                        2.0,
+                        "spectator hand request pending",
+                    )
+                    assert_true(
+                        pending_hand.get("payload", {}).get("seat_index") == 0,
+                        f"unexpected pending hand response: {pending_hand}",
+                    )
+                    player_hand_request, _ = game_sockets[0].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.request",
+                        2.0,
+                        "player hand consent request",
+                    )
+                    hand_request_id = player_hand_request.get("payload", {}).get("request_id")
+                    assert_true(isinstance(hand_request_id, str), f"missing hand request id: {player_hand_request}")
+                    game_sockets[0].send_json(
+                        {
+                            "type": "spectator.hand.respond",
+                            "requestId": "approve-spectator",
+                            "payload": {"request_id": hand_request_id, "approved": True},
+                        }
+                    )
+                    approval, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.result",
+                        2.0,
+                        "spectator hand approval",
+                    )
+                    assert_true(
+                        approval.get("payload", {}).get("approved") is True,
+                        f"unexpected approval response: {approval}",
+                    )
+                    revealed_hand, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.update",
+                        2.0,
+                        "approved spectator hand update",
+                    )
+                    revealed_payload = revealed_hand.get("payload", {})
+                    assert_true(revealed_payload.get("seat_index") == 0, f"wrong revealed seat: {revealed_hand}")
+                    assert_true(
+                        isinstance(revealed_payload.get("hand_tiles"), list)
+                        and len(revealed_payload["hand_tiles"]) > 0,
+                        f"approved hand tiles missing: {revealed_hand}",
+                    )
+
+                    spectator_ws.send_json(
+                        {
+                            "type": "spectator.hand.refresh",
+                            "requestId": "refresh-approved-hand",
+                            "payload": {},
+                        }
+                    )
+                    refreshed_hand, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.update"
+                        and message.get("requestId") == "refresh-approved-hand",
+                        2.0,
+                        "approved spectator hand refresh",
+                    )
+                    assert_true(
+                        refreshed_hand.get("payload", {}).get("seat_index") == 0,
+                        f"unexpected refreshed hand: {refreshed_hand}",
+                    )
+
+                    denied_spectator_ws = WebSocketClient(
+                        f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}"
+                    )
+                    denied_spectator_ws.expect_json(
+                        lambda message: message.get("type") == "session.snapshot",
+                        2.0,
+                        "second spectator snapshot",
+                    )
+                    denied_spectator_ws.send_json(
+                        {
+                            "type": "spectator.hand.request",
+                            "requestId": "request-seat-one",
+                            "payload": {"seat_index": 1},
+                        }
+                    )
+                    denied_spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.pending",
+                        2.0,
+                        "second spectator hand request pending",
+                    )
+                    denied_player_request, _ = game_sockets[1].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.request",
+                        2.0,
+                        "second player hand consent request",
+                    )
+                    denied_request_id = denied_player_request.get("payload", {}).get("request_id")
+                    assert_true(
+                        isinstance(denied_request_id, str),
+                        f"missing denied hand request id: {denied_player_request}",
+                    )
+                    game_sockets[1].send_json(
+                        {
+                            "type": "spectator.hand.respond",
+                            "requestId": "deny-spectator",
+                            "payload": {"request_id": denied_request_id, "approved": False},
+                        }
+                    )
+                    denial, _ = denied_spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.result",
+                        2.0,
+                        "spectator hand denial",
+                    )
+                    assert_true(
+                        denial.get("payload", {}).get("approved") is False,
+                        f"unexpected denial response: {denial}",
+                    )
+                    denied_spectator_ws.send_json(
+                        {
+                            "type": "spectator.hand.refresh",
+                            "requestId": "refresh-denied-hand",
+                            "payload": {},
+                        }
+                    )
+                    denied_refresh, _ = denied_spectator_ws.expect_json(
+                        lambda message: message.get("requestId") == "refresh-denied-hand",
+                        2.0,
+                        "denied spectator hand refresh",
+                    )
+                    assert_true(
+                        denied_refresh.get("type") == "error"
+                        and denied_refresh.get("payload", {}).get("code") == "hand_access_not_granted",
+                        f"denied spectator received hand access: {denied_refresh}",
+                    )
+
                 finally:
+                    if denied_spectator_ws is not None:
+                        denied_spectator_ws.close()
+                    if spectator_ws is not None:
+                        spectator_ws.close()
                     lobby_ws.close()
                     browser_lobby_ws.close()
                     for game_ws in game_sockets:
