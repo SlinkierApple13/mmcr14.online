@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -190,6 +191,7 @@ void NormalizeReplaySeedFields(Json::Value& round_record);
 enum class WebSocketRoute {
 	kLobby,
 	kGame,
+	kSpectate,
 	kReplay,
 };
 
@@ -257,8 +259,12 @@ private:
 
 class GameClientContext {
 public:
-	explicit GameClientContext(std::shared_ptr<auth::PlayerProfile> player, WebSocketRoute route)
-		: player_(std::move(player)), route_(route) {}
+	explicit GameClientContext(std::shared_ptr<auth::PlayerProfile> player,
+							 WebSocketRoute route,
+							 std::optional<std::int64_t> spectator_session_id = std::nullopt)
+		: player_(std::move(player)),
+		  route_(route),
+		  spectator_session_id_(spectator_session_id) {}
 
 	[[nodiscard]] const std::shared_ptr<auth::PlayerProfile>& player() const {
 		return player_;
@@ -276,6 +282,27 @@ public:
 		return route_;
 	}
 
+	[[nodiscard]] std::int64_t connection_key() const noexcept {
+		return spectator_session_id_.value_or(player_id());
+	}
+
+	[[nodiscard]] std::optional<std::int64_t> spectator_session_id() const noexcept {
+		return spectator_session_id_;
+	}
+
+	void set_revealed_hand(int seat, std::int64_t player_id) noexcept {
+		revealed_seat_.store(seat);
+		revealed_player_id_.store(player_id);
+	}
+
+	[[nodiscard]] int revealed_seat() const noexcept {
+		return revealed_seat_.load();
+	}
+
+	[[nodiscard]] std::int64_t revealed_player_id() const noexcept {
+		return revealed_player_id_.load();
+	}
+
 	void mark_registered_with_hub() noexcept {
 		registered_with_hub_ = true;
 	}
@@ -287,6 +314,9 @@ public:
 private:
 	std::shared_ptr<auth::PlayerProfile> player_;
 	WebSocketRoute route_{WebSocketRoute::kLobby};
+	std::optional<std::int64_t> spectator_session_id_;
+	std::atomic<int> revealed_seat_{-1};
+	std::atomic<std::int64_t> revealed_player_id_{0};
 	bool registered_with_hub_{false};
 };
 
@@ -328,6 +358,8 @@ public:
 								std::int64_t player_id,
 								WebSocketRoute route);
 	void SendToPlayer(std::int64_t player_id, const Json::Value& message, int delay_ms);
+	void SendToSpectators(std::int64_t session_id, const Json::Value& message, int delay_ms);
+	[[nodiscard]] bool HasLiveConnection(std::int64_t player_id, WebSocketRoute route);
 	void EvictPlayerFromRoute(std::int64_t player_id,
 				  WebSocketRoute route,
 				  DebugTrafficLogger* logger = nullptr,
@@ -462,8 +494,11 @@ public:
 				  std::optional<WebSocketRoute> route = std::nullopt);
 
 	void send_to_player(std::int64_t player_id,
-			   const Json::Value& message,
-			   int delay_ms = 0) override;
+				   const Json::Value& message,
+				   int delay_ms = 0) override;
+	void send_to_spectators(std::int64_t session_id,
+							   const Json::Value& message,
+							   int delay_ms = 0) override;
 	void on_session_ended(std::int64_t session_id,
 			      const std::array<std::int64_t, 4>& player_ids,
 			      const std::array<int, 4>& final_scores,

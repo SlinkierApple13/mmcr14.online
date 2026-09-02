@@ -326,6 +326,9 @@ public:
     [[nodiscard]] auto player_resumes(std::int64_t player_id) -> util::Status;
     [[nodiscard]] auto build_snapshot_for_player_id(std::int64_t player_id) const
         -> util::StatusOr<Json::Value>;
+    [[nodiscard]] auto build_snapshot_for_spectator() const -> Json::Value;
+    [[nodiscard]] auto build_spectator_hand_payload(int seat) const
+        -> util::StatusOr<Json::Value>;
     void end_session(std::int64_t timestamp_ms = 0, bool enqueue_record = true);
 
     [[nodiscard]] auto has_player(std::int64_t player_id) const -> bool {
@@ -377,6 +380,9 @@ private:
         const Event* context_event = nullptr) const -> Json::Value;
     [[nodiscard]] auto build_event_message_for_player(
         int seat,
+        const Event& event,
+        std::string_view category) const -> Json::Value;
+    [[nodiscard]] auto build_event_message_for_spectator(
         const Event& event,
         std::string_view category) const -> Json::Value;
 

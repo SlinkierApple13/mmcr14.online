@@ -257,6 +257,11 @@ util::StatusOr<Json::Value> ActiveSession::build_snapshot_for_player_id(std::int
 	return build_snapshot_for_player(*seat_index);
 }
 
+Json::Value ActiveSession::build_snapshot_for_spectator() const {
+	std::lock_guard lock(state_.mutex);
+	return build_snapshot_for_player(-1);
+}
+
 std::optional<int> ActiveSession::find_seat_index(std::int64_t player_id) const {
 	for (std::size_t index = 0; index < seats_.size(); ++index) {
 		if (seats_[index].player.matches(player_id)) {
@@ -1799,6 +1804,17 @@ void ActiveSession::broadcast_claim(const Event& event) {
 				std::max(last_protection_claim_event_ms_, event.timestamp_ms > 0 ? event.timestamp_ms : dispatch_now_ms);
 		}
 	}
+
+	int spectator_delay_ms = 0;
+	for (const auto& policy : policies) {
+		spectator_delay_ms = std::max(spectator_delay_ms, policy.delay_ms);
+	}
+	if (hub_ != nullptr) {
+		hub_->send_to_spectators(
+			identity_.id,
+			build_event_message_for_spectator(event, "claim"),
+			spectator_delay_ms);
+	}
 }
 
 // this function should not only broadcast the transition,
@@ -1884,6 +1900,12 @@ void ActiveSession::process_transition(const Event& transition) {
 					next_timer_delay_ms,
 					actual_delay_ms + WaitDurationMs(config_, policies[seat].set_pending, seats_[seat].auxiliary_ms));
 			}
+		}
+		if (hub_ != nullptr) {
+			hub_->send_to_spectators(
+				identity_.id,
+				build_event_message_for_spectator(transition, "transition"),
+				max_delivery_delay_ms);
 		}
 	}
 

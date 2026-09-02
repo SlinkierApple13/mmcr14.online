@@ -579,6 +579,15 @@ void GameHub::send_to_player(std::int64_t player_id, const Json::Value& message,
     transport_->send_to_player(player_id, message, delay_ms);
 }
 
+void GameHub::send_to_spectators(std::int64_t session_id,
+                                 const Json::Value& message,
+                                 int delay_ms) {
+    if (transport_ == nullptr) {
+        return;
+    }
+    transport_->send_to_spectators(session_id, message, delay_ms);
+}
+
 void GameHub::broadcast_to_players(const std::vector<std::int64_t>& player_ids,
                                    const Json::Value& message,
                                    int delay_ms) {

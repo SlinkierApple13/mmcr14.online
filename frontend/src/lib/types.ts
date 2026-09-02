@@ -102,6 +102,7 @@ export interface SeatSnapshot {
 
 export interface ViewerSnapshot {
   seat_index: number
+  spectator?: boolean
   pending: string
   decision_timer_ms: number | null
   pending_start_timer_remaining_ms?: number | null
@@ -128,6 +129,7 @@ export interface ActiveSessionSnapshot {
   seats: SeatSnapshot[]
   viewer: ViewerSnapshot
   result_event?: GameEventSnapshot | null
+  spectator?: boolean
   reveal_all_hands?: boolean
 }
 
@@ -174,6 +176,7 @@ export interface GameEventPayload {
   state: GameState
   viewer: ViewerSnapshot
   seat_status: CompactSeatStatus[]
+  spectator?: boolean
   reveal_all_hands?: boolean
 }
 

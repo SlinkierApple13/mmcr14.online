@@ -759,7 +759,11 @@ function LobbyPage() {
             </Button>
           )
         }
-        return null
+        return (
+          <Button type="primary" onClick={() => navigate(`/game?gameId=${record.session_id}&spectate=1`)}>
+            观战
+          </Button>
+        )
       },
     },
   ]
