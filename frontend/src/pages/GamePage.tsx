@@ -113,6 +113,7 @@ export default function GamePage() {
   const [requestedHandSeat, setRequestedHandSeat] = useState<number | null>(null)
   const [approvedHandSeat, setApprovedHandSeat] = useState<number | null>(null)
   const approvedHandSeatRef = useRef<number | null>(null)
+  const [spectatorPerspectiveSeat, setSpectatorPerspectiveSeat] = useState(0)
   const [spectatorHandRequests, setSpectatorHandRequests] = useState<SpectatorHandRequest[]>([])
   const [grantedSpectatorSeats, setGrantedSpectatorSeats] = useState<number[]>([])
 
@@ -247,6 +248,7 @@ export default function GamePage() {
                 ? current
                 : [...current, payload as SpectatorHandRequest]
             ))
+            notify('收到观众看牌申请')
           }
           return
         }
@@ -349,6 +351,10 @@ export default function GamePage() {
               }))
               spectatorSeatsRef.current = seats
               setSpectatorSeats(seats)
+              setSpectatorPerspectiveSeat(snap.viewer.seat_index)
+              if (approvedHandSeatRef.current !== null) {
+                sendEnvelope(socket, 'spectator.hand.refresh', {})
+              }
             }
             // Restart periodic ping after a successful reconnect
             sceneRef.current?.restartPeriodicPing()
@@ -569,6 +575,12 @@ export default function GamePage() {
     setRequestedHandSeat(seatIndex)
   }
 
+  function changeSpectatorPerspective(seatIndex: number) {
+    const socket = socketRef.current
+    if (!isSpectator || !socket || socket.readyState !== WebSocket.OPEN) return
+    sendEnvelope(socket, 'spectator.perspective', { seat_index: seatIndex })
+  }
+
   function respondToSpectatorHand(request: SpectatorHandRequest, approved: boolean) {
     const socket = socketRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN) return
@@ -629,6 +641,24 @@ export default function GamePage() {
           }
         })
       return sortRatingCards(pendingCards)
+    }
+    if (isSpectator && spectatorSeats.length > 0) {
+      const spectatorCards = spectatorSeats
+        .filter((seat) => seat.player_id !== null)
+        .map((seat) => {
+          const playerId = seat.player_id as number
+          const fromRatings = gameRatings.find((rating) => rating.player_id === playerId)
+          return {
+            player_id: playerId,
+            username: seat.username ?? fromRatings?.username,
+            mu: fromRatings?.mu,
+            tau: fromRatings?.tau,
+            sigma: fromRatings?.sigma,
+            points: fromRatings?.points,
+            level: fromRatings?.level,
+          }
+        })
+      return sortRatingCards(spectatorCards)
     }
     return sortRatingCards(gameRatings)
   })()
@@ -709,12 +739,6 @@ export default function GamePage() {
           </div>
         </div>
       )}
-      {isSpectator && (
-        <div className="game-spectator-toolbar">
-          <span>观战中</span>
-          <button type="button" onClick={() => navigate('/')}>返回大厅</button>
-        </div>
-      )}
       {/* {phase === 'loading' && <div className="game-loading">连接牌桌中…</div>} */}
       <div className="game-page__layout" style={{ background: sceneAppearance.backgroundColorOutside }}>
         <section className="game-page__board-panel">
@@ -735,6 +759,7 @@ export default function GamePage() {
                 : undefined
               const isApproved = seat !== undefined && approvedHandSeat === seat.seat_index
               const isPending = seat !== undefined && requestedHandSeat === seat.seat_index
+              const isPerspective = seat !== undefined && spectatorPerspectiveSeat === seat.seat_index
               return (
                 <div className="game-page__sidebar-card" key={r.player_id}>
                   <div className="player-name">
@@ -750,15 +775,27 @@ export default function GamePage() {
                       R {r.mu.toFixed(2)}±{r.tau?.toFixed(2)} · σ {r.sigma?.toFixed(2)}
                     </div>
                   )}
-                  {isSpectator && seat !== undefined && r.player_id > 0 && (
-                    <button
-                      type="button"
-                      className={`spectator-hand-request${isApproved ? ' is-approved' : ''}`}
-                      disabled={isApproved || requestedHandSeat !== null}
-                      onClick={() => requestSpectatorHand(seat.seat_index)}
-                    >
-                      {isApproved ? '已允许看牌' : isPending ? '等待同意…' : '申请看牌'}
-                    </button>
+                  {isSpectator && seat !== undefined && (
+                    <div className="spectator-player-actions">
+                      {r.player_id > 0 && (
+                        <button
+                          type="button"
+                          className={`spectator-hand-request${isApproved ? ' is-approved' : ''}`}
+                          disabled={isApproved || requestedHandSeat !== null}
+                          onClick={() => requestSpectatorHand(seat.seat_index)}
+                        >
+                          {isApproved ? '已允许看牌' : isPending ? '等待同意…' : '申请看牌'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className={`spectator-perspective-button${isPerspective ? ' is-active' : ''}`}
+                        disabled={isPerspective}
+                        onClick={() => changeSpectatorPerspective(seat.seat_index)}
+                      >
+                        {isPerspective ? '当前视角' : '切换视角'}
+                      </button>
+                    </div>
                   )}
                 </div>
               )

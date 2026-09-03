@@ -488,6 +488,27 @@ def main():
                     assert_true(viewer.get("wait_data") is None, f"spectator received wait data: {viewer}")
 
                     spectator_ws.send_json(
+                        {
+                            "type": "spectator.perspective",
+                            "requestId": "perspective-seat-two",
+                            "payload": {"seat_index": 2},
+                        }
+                    )
+                    shifted_snapshot, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "session.snapshot"
+                        and message.get("requestId") == "perspective-seat-two",
+                        2.0,
+                        "shifted spectator perspective",
+                    )
+                    assert_true(
+                        shifted_snapshot.get("payload", {}).get("viewer", {}).get("seat_index") == 2,
+                        f"spectator perspective did not shift: {shifted_snapshot}",
+                    )
+                    for seat in shifted_snapshot.get("payload", {}).get("seats", []):
+                        assert_true("hand_tiles" not in seat, f"shifted snapshot leaked hand tiles: {seat}")
+                        assert_true("drawn_tile" not in seat, f"shifted snapshot leaked a draw: {seat}")
+
+                    spectator_ws.send_json(
                         {"type": "game.input", "requestId": "spectator-write", "payload": {}}
                     )
                     spectator_error, _ = spectator_ws.expect_json(
@@ -516,10 +537,15 @@ def main():
                         pending_hand.get("payload", {}).get("seat_index") == 0,
                         f"unexpected pending hand response: {pending_hand}",
                     )
+                    game_sockets[0].close()
+                    game_sockets[0] = WebSocketClient(
+                        f"ws://{args.host}:{args.port}/ws/game?session_id={session_id}",
+                        tokens[0],
+                    )
                     player_hand_request, _ = game_sockets[0].expect_json(
                         lambda message: message.get("type") == "spectator.hand.request",
                         2.0,
-                        "player hand consent request",
+                        "replayed player hand consent request",
                     )
                     hand_request_id = player_hand_request.get("payload", {}).get("request_id")
                     assert_true(isinstance(hand_request_id, str), f"missing hand request id: {player_hand_request}")

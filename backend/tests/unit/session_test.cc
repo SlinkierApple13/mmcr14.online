@@ -143,6 +143,13 @@ TEST(ActiveSessionTest, SpectatorSnapshotNeverContainsConcealedTilesOrActions) {
 	EXPECT_TRUE(viewer["available_actions"].isArray());
 	EXPECT_TRUE(viewer["available_actions"].empty());
 	EXPECT_TRUE(viewer["wait_data"].isNull());
+
+	const Json::Value shifted = harness.session.build_snapshot_for_spectator(2);
+	EXPECT_EQ(2, shifted["viewer"]["seat_index"].asInt());
+	for (const auto& seat : shifted["seats"]) {
+		EXPECT_FALSE(seat.isMember("hand_tiles"));
+		EXPECT_FALSE(seat.isMember("drawn_tile"));
+	}
 }
 
 TEST(ActiveSessionTest, SpectatorEventsKeepPublicActionsAndHideWinningHandData) {

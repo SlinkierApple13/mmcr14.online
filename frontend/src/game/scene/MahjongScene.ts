@@ -1396,8 +1396,10 @@ export class MahjongScene {
             this.createHand(3, c, this.rivers[3], null),
           ]
 
-          // Viewer seat_index already reflects the new seat after shuffle/rotation
-          this.selfDir = viewer.seat_index as number ?? this.selfDir
+          // A spectator's selected perspective survives round transitions.
+          if (this.presentationMode !== 'spectator') {
+            this.selfDir = viewer.seat_index as number ?? this.selfDir
+          }
           this.updateDirectionLabels()
 
           // Reset scores (names will be repopulated in Phase B from seat_status)

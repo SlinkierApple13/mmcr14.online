@@ -326,7 +326,7 @@ public:
     [[nodiscard]] auto player_resumes(std::int64_t player_id) -> util::Status;
     [[nodiscard]] auto build_snapshot_for_player_id(std::int64_t player_id) const
         -> util::StatusOr<Json::Value>;
-    [[nodiscard]] auto build_snapshot_for_spectator() const -> Json::Value;
+    [[nodiscard]] auto build_snapshot_for_spectator(int perspective_seat = 0) const -> Json::Value;
     [[nodiscard]] auto build_spectator_hand_payload(int seat) const
         -> util::StatusOr<Json::Value>;
     void end_session(std::int64_t timestamp_ms = 0, bool enqueue_record = true);

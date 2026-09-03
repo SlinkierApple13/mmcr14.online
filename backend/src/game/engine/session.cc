@@ -257,9 +257,11 @@ util::StatusOr<Json::Value> ActiveSession::build_snapshot_for_player_id(std::int
 	return build_snapshot_for_player(*seat_index);
 }
 
-Json::Value ActiveSession::build_snapshot_for_spectator() const {
+Json::Value ActiveSession::build_snapshot_for_spectator(int perspective_seat) const {
 	std::lock_guard lock(state_.mutex);
-	return build_snapshot_for_player(-1);
+	Json::Value snapshot = build_snapshot_for_player(-1);
+	snapshot["viewer"]["seat_index"] = perspective_seat;
+	return snapshot;
 }
 
 std::optional<int> ActiveSession::find_seat_index(std::int64_t player_id) const {

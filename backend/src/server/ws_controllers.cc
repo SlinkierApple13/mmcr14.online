@@ -630,6 +630,10 @@ public:
 			return;
 		}
 		if (context->route() == WebSocketRoute::kSpectate) {
+			if (message_type.has_value() && *message_type == "spectator.perspective") {
+				handleSpectatorPerspective(connection, context, root, request_id);
+				return;
+			}
 			if (message_type.has_value() && *message_type == "spectator.hand.request") {
 				handleSpectatorHandRequest(connection, context, root, request_id);
 				return;
@@ -787,6 +791,7 @@ public:
 			state_->socket_hub().EvictPlayerFromRoute(
 				player->player_id, WebSocketRoute::kGame,
 				state_->traffic_logger(), connection.get());
+			sendPendingHandRequests(connection, player->player_id);
 
 			auto requested_session_id = ExtractWebSocketSessionId(request);
 			if (!requested_session_id.ok()) {
@@ -993,6 +998,34 @@ private:
 		}
 	}
 
+	void sendPendingHandRequests(
+			const drogon::WebSocketConnectionPtr& connection,
+			std::int64_t player_id) {
+		std::vector<std::pair<std::string, PendingSpectatorHandRequest>> pending_requests;
+		{
+			std::lock_guard lock(spectator_hand_mutex_);
+			pruneExpiredHandRequestsLocked();
+			for (const auto& [request_id, hand_request] : spectator_hand_requests_) {
+				if (hand_request.target_player_id == player_id) {
+					pending_requests.emplace_back(request_id, hand_request);
+				}
+			}
+		}
+
+		for (const auto& [request_id, hand_request] : pending_requests) {
+			Json::Value payload(Json::objectValue);
+			payload["request_id"] = request_id;
+			payload["session_id"] = Json::Int64(hand_request.session_id);
+			payload["seat_index"] = hand_request.target_seat;
+			state_->SendWebSocketJson(
+				connection,
+				MakeWebSocketEnvelope("spectator.hand.request", std::move(payload)),
+				0,
+				player_id,
+				WebSocketRoute::kGame);
+		}
+	}
+
 	void sendApprovedHand(const drogon::WebSocketConnectionPtr& connection,
 					  const std::shared_ptr<GameClientContext>& context,
 					  std::string_view request_id = {}) {
@@ -1151,6 +1184,48 @@ private:
 		const std::shared_ptr<GameClientContext>& context,
 		std::string_view request_id) {
 		sendApprovedHand(connection, context, request_id);
+	}
+
+	void handleSpectatorPerspective(
+		const drogon::WebSocketConnectionPtr& connection,
+		const std::shared_ptr<GameClientContext>& context,
+		const Json::Value& root,
+		std::string_view request_id) {
+		const Json::Value* payload = FindField(root, {"payload"});
+		const Json::Value* seat_value =
+			payload != nullptr && payload->isObject() ? FindField(*payload, {"seat_index"}) : nullptr;
+		if (seat_value == nullptr || !seat_value->isInt() ||
+				seat_value->asInt() < 0 || seat_value->asInt() >= 4) {
+			sendSpectatorError(
+				connection, "invalid_argument", "valid seat_index is required", request_id);
+			return;
+		}
+
+		const auto session_id = context->spectator_session_id();
+		if (!session_id.has_value()) {
+			sendSpectatorError(
+				connection, "invalid_argument", "spectator session is missing", request_id);
+			return;
+		}
+		auto active_session = state_->FindActiveSession(*session_id);
+		if (!active_session.ok()) {
+			sendSpectatorError(
+				connection,
+				StatusCodeName(active_session.status().code()),
+				active_session.status().message(),
+				request_id);
+			return;
+		}
+
+		state_->SendWebSocketJson(
+			connection,
+			MakeWebSocketEnvelope(
+				"session.snapshot",
+				active_session.value()->build_snapshot_for_spectator(seat_value->asInt()),
+				request_id),
+			0,
+			context->player_id(),
+			WebSocketRoute::kSpectate);
 	}
 
 	void handleSpectatorHandResponse(
