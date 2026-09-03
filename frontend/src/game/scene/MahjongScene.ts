@@ -34,7 +34,7 @@ type ViewerSyncContext = {
   actorSeat: number
 }
 
-type ScenePresentationMode = 'game' | 'replay'
+type ScenePresentationMode = 'game' | 'spectator' | 'replay'
 
 /** Direction conversion helper: absolute seat → viewer-relative. */
 function transDir(absoluteDir: number, selfDir: number): number {
@@ -194,6 +194,18 @@ export class MahjongScene {
 
   setPresentationMode(mode: ScenePresentationMode): void {
     this.presentationMode = mode
+  }
+
+  revealSpectatorHand(absoluteSeat: number, handTiles: number[], drawnTile: number | null): void {
+    if (this.presentationMode !== 'spectator') return
+    const localDir = transDir(absoluteSeat, this.selfDir)
+    this.hands[localDir]?.revealHand(handTiles, drawnTile)
+  }
+
+  concealSpectatorHand(absoluteSeat: number, handTileCount: number, hasDrawnTile: boolean): void {
+    if (this.presentationMode !== 'spectator') return
+    const localDir = transDir(absoluteSeat, this.selfDir)
+    this.hands[localDir]?.concealHand(handTileCount, hasDrawnTile)
   }
 
   setReplayRecordVersion(version: number): void {
@@ -419,7 +431,7 @@ export class MahjongScene {
 
   private startPeriodicPing(): void {
     this.stopPeriodicPing()
-    if (this.presentationMode !== 'game') return
+    if (this.presentationMode === 'replay') return
     this.pingIntervalId = setInterval(() => {
       this.sendLatencyPing()
     }, 5000)
@@ -433,7 +445,7 @@ export class MahjongScene {
   }
 
   private sendLatencyPing(): void {
-    if (this.presentationMode !== 'game') return
+    if (this.presentationMode === 'replay') return
 
     const identifier = ++this.latencyPingCounter
     this.latencyPingSentAt.set(identifier, Date.now())
@@ -698,7 +710,7 @@ export class MahjongScene {
     reactionTile: number | null = null,
     context: ViewerSyncContext | null = null,
   ): void {
-    if (this.presentationMode === 'replay') {
+    if (this.presentationMode !== 'game') {
       this.currentPendingStatus = 'none'
       this.currentViewerActions = []
       this.inputEnabled = false
@@ -964,17 +976,17 @@ export class MahjongScene {
 
   private setDirectionLabelsVisible(visible: boolean): void {
     for (let localDir = 0; localDir < 4; localDir += 1) {
-      this.directionLabels[localDir].visible = visible && (this.presentationMode === 'replay' || localDir === 0)
+      this.directionLabels[localDir].visible = visible && (this.presentationMode !== 'game' || localDir === 0)
     }
   }
 
   private createHand(direction: number, parent: Container, river: River, waitDisplay: WaitDisplay | null): Hand {
-    return new Hand(direction, parent, river, waitDisplay, this.presentationMode === 'replay')
+    return new Hand(direction, parent, river, waitDisplay, this.presentationMode !== 'game')
   }
 
   private createSceneTile(tid: number): Tile {
     const tile = Tile.newInvisible(tid)
-    if (this.presentationMode === 'replay') {
+    if (this.presentationMode !== 'game') {
       tile.setHoverVisualEnabled(false)
     }
     return tile
@@ -1081,8 +1093,8 @@ export class MahjongScene {
     this.countdown.visible = false
     this.setLatencyIndicatorVisible(false)
     this.volDisplay.visible = false
-    this.optDisplay.visible = this.presentationMode !== 'replay'
-    this.waitDisplay.visible = this.presentationMode !== 'replay'
+    this.optDisplay.visible = this.presentationMode === 'game'
+    this.waitDisplay.visible = this.presentationMode === 'game'
 
     if (!this.app) return
     this.redrawBackground()
@@ -1134,6 +1146,7 @@ export class MahjongScene {
 
     const { viewer, seats, state } = snapshot
     const revealAllHands = Boolean(snapshot.reveal_all_hands)
+    const spectator = Boolean(snapshot.spectator || viewer.spectator)
     this.pendingPassAckStageCounter = null
     this.selfDir = viewer.seat_index
     this.currentStageCounter = state.stage_counter
@@ -1232,7 +1245,7 @@ export class MahjongScene {
       }
 
       // Hand tiles
-      if (localDir === 0 || (revealAllHands && Array.isArray(seat.hand_tiles))) {
+      if ((!spectator && localDir === 0) || (revealAllHands && Array.isArray(seat.hand_tiles))) {
         for (const tid of seat.hand_tiles ?? []) {
           const tile = Tile.newInvisible(tid)
           tile.updateTid(tid)
@@ -1293,9 +1306,9 @@ export class MahjongScene {
 
     // Reveal game elements
     this.setDirectionLabelsVisible(true)
-    this.optDisplay.visible = this.presentationMode !== 'replay'
-    this.waitDisplay.visible = this.presentationMode !== 'replay'
-    if (this.presentationMode === 'replay') {
+    this.optDisplay.visible = this.presentationMode === 'game'
+    this.waitDisplay.visible = this.presentationMode === 'game'
+    if (this.presentationMode !== 'game') {
       this.countdown.stop()
       this.countdown.visible = false
     }
@@ -1318,6 +1331,7 @@ export class MahjongScene {
     const state: Record<string, any> = payload.state ?? {}
     const kind: string = event.kind ?? ''
     const revealAllHands = Boolean(payload.reveal_all_hands)
+    const spectator = Boolean(payload.spectator || viewer.spectator)
 
     if (this.presentationMode === 'replay') {
       this.clearReplayClaimLabel()
@@ -1382,8 +1396,10 @@ export class MahjongScene {
             this.createHand(3, c, this.rivers[3], null),
           ]
 
-          // Viewer seat_index already reflects the new seat after shuffle/rotation
-          this.selfDir = viewer.seat_index as number ?? this.selfDir
+          // A spectator's selected perspective survives round transitions.
+          if (this.presentationMode !== 'spectator') {
+            this.selfDir = viewer.seat_index as number ?? this.selfDir
+          }
           this.updateDirectionLabels()
 
           // Reset scores (names will be repopulated in Phase B from seat_status)
@@ -1401,8 +1417,9 @@ export class MahjongScene {
           const count = stage < 12 ? 4 : 1
           for (let i = 0; i < count; i += 1) {
             const tid = drawnTiles[i] ?? 0
-            const tileObj = actorDir === 0 || revealAllHands ? Tile.newInvisible(tid) : Tile.newInvisible(0)
-            if (actorDir === 0 || revealAllHands) { tileObj.updateTid(tid); tileObj.show() }
+            const showTile = (!spectator && actorDir === 0) || revealAllHands
+            const tileObj = showTile ? Tile.newInvisible(tid) : Tile.newInvisible(0)
+            if (showTile) { tileObj.updateTid(tid); tileObj.show() }
             else { tileObj.hide() }
             this.hands[actorDir].addRightList(tileObj)
           }
@@ -1416,7 +1433,7 @@ export class MahjongScene {
         case 'draw_tile': {
           this.remainingTiles = Math.max(0, this.remainingTiles - 1)
           this.stateDisplay.setRemaining(this.remainingTiles)
-          if ((actorDir === 0 || revealAllHands) && tile !== undefined) {
+          if (((!spectator && actorDir === 0) || revealAllHands) && tile !== undefined) {
             const t = Tile.newInvisible(tile); t.updateTid(tile); t.show()
             this.hands[actorDir].drawTile(t)
           } else {
@@ -1720,7 +1737,7 @@ export class MahjongScene {
     this.optDisplay.visible = false
     this.volDisplay.visible = false
     this.setViewerWaitInfo(null)
-    this.waitDisplay.visible = this.presentationMode !== 'replay'
+    this.waitDisplay.visible = this.presentationMode === 'game'
 
     // Show player list on the temporary center overlay, matching the legacy scene.
     this.stateDisplay.clear()

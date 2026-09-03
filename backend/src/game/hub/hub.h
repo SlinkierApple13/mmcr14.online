@@ -38,6 +38,13 @@ public:
 	virtual void send_to_player(std::int64_t player_id,
 								const Json::Value& message,
 								int delay_ms = 0) = 0;
+	virtual void send_to_spectators(std::int64_t session_id,
+								   const Json::Value& message,
+								   int delay_ms = 0) {
+		(void)session_id;
+		(void)message;
+		(void)delay_ms;
+	}
 
 	virtual void on_session_ended(std::int64_t /*session_id*/,
 								const std::array<std::int64_t, 4>& /*player_ids*/,
@@ -113,6 +120,9 @@ public:
 	void register_anonymous_browser();
 	void notify_session_lists_changed();
 	void send_to_player(std::int64_t player_id, const Json::Value& message, int delay_ms = 0);
+	void send_to_spectators(std::int64_t session_id,
+							   const Json::Value& message,
+							   int delay_ms = 0);
 	void broadcast_to_players(const std::vector<std::int64_t>& player_ids,
 							  const Json::Value& message,
 							  int delay_ms = 0);

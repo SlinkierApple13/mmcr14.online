@@ -24,6 +24,7 @@
 
 namespace mmcr::game {
 void GameHub::send_to_player(std::int64_t, const Json::Value&, int) {}
+void GameHub::send_to_spectators(std::int64_t, const Json::Value&, int) {}
 void GameHub::notify_session_lists_changed() {}
 
 namespace {
@@ -115,6 +116,101 @@ TEST(ActiveSessionTest, RecomputesWaitOptionsDuringInitialDeal) {
 			EXPECT_TRUE(harness.session.seats_[seat].wait_options.contains(wait_tile));
 		}
 	}
+}
+
+TEST(ActiveSessionTest, SpectatorSnapshotNeverContainsConcealedTilesOrActions) {
+	SessionHarness harness;
+	StepToFirstDiscard(harness);
+
+	const Json::Value snapshot = harness.session.build_snapshot_for_spectator();
+	EXPECT_EQ("active", snapshot["phase"].asString());
+	EXPECT_TRUE(snapshot["spectator"].asBool());
+	ASSERT_TRUE(snapshot["seats"].isArray());
+	ASSERT_EQ(4U, snapshot["seats"].size());
+	for (Json::ArrayIndex seat_index = 0; seat_index < snapshot["seats"].size(); ++seat_index) {
+		const Json::Value& seat = snapshot["seats"][seat_index];
+		EXPECT_FALSE(seat.isMember("hand_tiles"));
+		EXPECT_FALSE(seat.isMember("drawn_tile"));
+		EXPECT_EQ(
+			static_cast<Json::UInt64>(harness.session.seats_[seat_index].hand_tiles.size()),
+			seat["hand_tile_count"].asUInt64());
+	}
+
+	const Json::Value& viewer = snapshot["viewer"];
+	EXPECT_TRUE(viewer["spectator"].asBool());
+	EXPECT_EQ(0, viewer["seat_index"].asInt());
+	EXPECT_EQ("none", viewer["pending"].asString());
+	EXPECT_TRUE(viewer["available_actions"].isArray());
+	EXPECT_TRUE(viewer["available_actions"].empty());
+	EXPECT_TRUE(viewer["wait_data"].isNull());
+
+	const Json::Value shifted = harness.session.build_snapshot_for_spectator(2);
+	EXPECT_EQ(2, shifted["viewer"]["seat_index"].asInt());
+	for (const auto& seat : shifted["seats"]) {
+		EXPECT_FALSE(seat.isMember("hand_tiles"));
+		EXPECT_FALSE(seat.isMember("drawn_tile"));
+	}
+}
+
+TEST(ActiveSessionTest, SpectatorEventsKeepPublicActionsAndRevealWinningHands) {
+	SessionHarness harness;
+
+	Event discard;
+	discard.kind = EventKind::kDiscardTile;
+	discard.actor_seat = 2;
+	discard.tile = mahjong::tile_t{0x21};
+	discard.timestamp_ms = 1234;
+	const Json::Value discard_message =
+		harness.session.build_event_message_for_spectator(discard, "transition");
+	const Json::Value& discard_payload = discard_message["payload"];
+	EXPECT_TRUE(discard_payload["spectator"].asBool());
+	EXPECT_EQ("discard_tile", discard_payload["event"]["kind"].asString());
+	EXPECT_EQ(0x21U, discard_payload["event"]["tile"].asUInt());
+	EXPECT_TRUE(discard_payload["viewer"]["available_actions"].empty());
+
+	Event self_drawn_win;
+	self_drawn_win.kind = EventKind::kSelfDrawnWin;
+	self_drawn_win.actor_seat = 1;
+	self_drawn_win.tile = mahjong::tile_t{0x22};
+	self_drawn_win.revealed_hand_tiles = {mahjong::tile_t{0x11}, mahjong::tile_t{0x12}};
+	self_drawn_win.timestamp_ms = 2345;
+	const Json::Value win_message =
+		harness.session.build_event_message_for_spectator(self_drawn_win, "transition");
+	const Json::Value& win_event = win_message["payload"]["event"];
+	EXPECT_EQ("self_drawn_win", win_event["kind"].asString());
+	EXPECT_EQ(0x22U, win_event["tile"].asUInt());
+	ASSERT_TRUE(win_event["revealed_hand_tiles"].isArray());
+	ASSERT_EQ(2U, win_event["revealed_hand_tiles"].size());
+	EXPECT_EQ(0x11U, win_event["revealed_hand_tiles"][0].asUInt());
+	EXPECT_EQ(0x12U, win_event["revealed_hand_tiles"][1].asUInt());
+
+	for (const EventKind kind : {EventKind::kDiscardWin, EventKind::kRobAddedKongWin}) {
+		Event claimed_win = self_drawn_win;
+		claimed_win.kind = kind;
+		const Json::Value claimed_message =
+			harness.session.build_event_message_for_spectator(claimed_win, "transition");
+		const Json::Value& claimed_event = claimed_message["payload"]["event"];
+		EXPECT_EQ(0x22U, claimed_event["tile"].asUInt());
+		EXPECT_EQ(2U, claimed_event["revealed_hand_tiles"].size());
+	}
+}
+
+TEST(ActiveSessionTest, ApprovedSpectatorHandPayloadContainsOnlyRequestedSeat) {
+	SessionHarness harness;
+	StepToFirstDiscard(harness);
+
+	auto hand_payload = harness.session.build_spectator_hand_payload(2);
+	ASSERT_TRUE(hand_payload.ok()) << hand_payload.status().DebugString();
+	EXPECT_EQ(2, hand_payload.value()["seat_index"].asInt());
+	EXPECT_EQ(77, hand_payload.value()["session_id"].asInt64());
+	EXPECT_TRUE(hand_payload.value()["hand_tiles"].isArray());
+	EXPECT_EQ(
+		harness.session.seats_[2].hand_tiles.size(),
+		hand_payload.value()["hand_tiles"].size());
+	EXPECT_FALSE(hand_payload.value().isMember("seats"));
+
+	auto invalid_payload = harness.session.build_spectator_hand_payload(4);
+	EXPECT_FALSE(invalid_payload.ok());
 }
 
 TEST(ActiveSessionTest, ForcedDiscardRecordsDiscardPileAndCountsAfk) {
@@ -347,6 +443,9 @@ TEST(ActiveSessionTest, IncrementalEventMessageOmitsFullSnapshot) {
 	EXPECT_TRUE(message["payload"]["state"].isObject());
 	EXPECT_TRUE(message["payload"]["viewer"].isObject());
 	EXPECT_TRUE(message["payload"]["seat_status"].isArray());
+	for (const auto& seat : message["payload"]["seat_status"]) {
+		EXPECT_TRUE(seat.isMember("player_id"));
+	}
 }
 
 TEST(ActiveSessionTest, WinPayloadIncludesExplicitFanNames) {

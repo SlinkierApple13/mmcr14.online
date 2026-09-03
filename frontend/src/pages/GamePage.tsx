@@ -36,6 +36,20 @@ type RatingCard = {
   level?: number
 }
 
+type SpectatorSeat = {
+  seat_index: number
+  player_id: number | null
+  username: string | null
+  hand_tile_count: number
+  has_drawn_tile: boolean
+}
+
+type SpectatorHandRequest = {
+  request_id: string
+  seat_index: number
+  spectator_username: string
+}
+
 function resolveSessionId(routeId: string | undefined, search: string): number | null {
   const params = new URLSearchParams(search)
   const candidates = [routeId, params.get('gameId'), params.get('sessionId')]
@@ -54,9 +68,10 @@ export default function GamePage() {
 
   const auth = loadStoredAuth()
   const token = auth?.session.token ?? null
+  const isSpectator = new URLSearchParams(location.search).get('spectate') === '1'
 
   const [sessionIdHint, setSessionIdHint] = useState<number | null>(
-    () => resolveSessionId(params.sessionId, location.search) ?? loadStoredSessionId(),
+    () => resolveSessionId(params.sessionId, location.search) ?? (isSpectator ? null : loadStoredSessionId()),
   )
   const [phase, setPhase] = useState<'loading' | 'pending' | 'active'>('loading')
   const [pendingSnapshot, setPendingSnapshot] = useState<PendingSnapshot | null>(null)
@@ -94,11 +109,23 @@ export default function GamePage() {
   const endTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [gameRatings, setGameRatings] = useState<RatingCard[]>([])
   const [pendingRatings, setPendingRatings] = useState<RatingCard[]>([])
+  const [spectatorSeats, setSpectatorSeats] = useState<SpectatorSeat[]>([])
+  const spectatorSeatsRef = useRef<SpectatorSeat[]>([])
+  const [requestedHandSeat, setRequestedHandSeat] = useState<number | null>(null)
+  const [approvedHandSeat, setApprovedHandSeat] = useState<number | null>(null)
+  const approvedHandSeatRef = useRef<number | null>(null)
+  const [spectatorPerspectiveSeat, setSpectatorPerspectiveSeat] = useState(0)
+  const spectatorPerspectiveSeatRef = useRef(0)
+  const spectatorPerspectivePlayerIdRef = useRef<number | null>(null)
+  const [spectatorHandRequests, setSpectatorHandRequests] = useState<SpectatorHandRequest[]>([])
+  const [grantedSpectatorSeats, setGrantedSpectatorSeats] = useState<number[]>([])
 
   // ── Resolve session id from URL changes ───────────────────────
   useEffect(() => {
-    setSessionIdHint(resolveSessionId(params.sessionId, location.search) ?? loadStoredSessionId())
-  }, [location.search, params.sessionId])
+    setSessionIdHint(
+      resolveSessionId(params.sessionId, location.search) ?? (isSpectator ? null : loadStoredSessionId()),
+    )
+  }, [isSpectator, location.search, params.sessionId])
 
   // ── Mount Pixi scene ──────────────────────────────────────────
   useEffect(() => {
@@ -110,6 +137,7 @@ export default function GamePage() {
         sendEnvelope(s, type, payload)
       }
     })
+    scene.setPresentationMode(isSpectator ? 'spectator' : 'game')
     sceneRef.current = scene
     setSceneReady(false)
     scene.mount(stageRef.current).then((mounted) => {
@@ -142,7 +170,7 @@ export default function GamePage() {
         sceneRef.current = null
       }
     }
-  }, [])
+  }, [isSpectator])
 
   useEffect(() => {
     sceneRef.current?.setAppearance(sceneAppearance)
@@ -160,7 +188,7 @@ export default function GamePage() {
 
   // ── WebSocket ─────────────────────────────────────────────────
   useEffect(() => {
-    if (!token || !sceneReady) {
+    if (!token || (isSpectator && !sessionIdHint) || !sceneReady) {
       setPhase('loading')
       authoritativeActiveRef.current = false
       return
@@ -172,14 +200,18 @@ export default function GamePage() {
     const connect = () => {
       if (disposedRef.current) return
 
-      const url = buildWebSocketUrl('/ws/game', token, sessionIdHint ? { session_id: sessionIdHint } : {})
+      const url = buildWebSocketUrl(
+        isSpectator ? '/ws/spectate' : '/ws/game',
+        token,
+        sessionIdHint ? { session_id: sessionIdHint } : {},
+      )
       const socket = new WebSocket(url)
       socketRef.current = socket
 
       const scheduleLobbyReturn = () => {
         if (endTimeoutRef.current !== null) return
         intentionalClose = true
-        clearStoredSessionId()
+        if (!isSpectator) clearStoredSessionId()
         endTimeoutRef.current = setTimeout(() => {
           endTimeoutRef.current = null
           const current = socketRef.current
@@ -191,6 +223,11 @@ export default function GamePage() {
 
       socket.onopen = () => {
         if (disposedRef.current || socketRef.current !== socket) return
+        if (isSpectator) {
+          setRequestedHandSeat(null)
+          setApprovedHandSeat(null)
+          approvedHandSeatRef.current = null
+        }
       }
 
       socket.onmessage = (evt) => {
@@ -203,6 +240,85 @@ export default function GamePage() {
         if (env.type === 'pong') {
           const payload = env.payload as { identifier?: number } | null
           sceneRef.current?.handleLatencyPong(payload?.identifier)
+          return
+        }
+
+        if (env.type === 'spectator.hand.request' && !isSpectator) {
+          const payload = env.payload as Partial<SpectatorHandRequest>
+          if (typeof payload.request_id === 'string' &&
+              typeof payload.seat_index === 'number' &&
+              typeof payload.spectator_username === 'string') {
+            setSpectatorHandRequests((current) => (
+              current.some((item) => item.request_id === payload.request_id)
+                ? current
+                : [...current, payload as SpectatorHandRequest]
+            ))
+            notify('收到观众看牌申请')
+          }
+          return
+        }
+
+        if (env.type === 'spectator.hand.pending' && isSpectator) {
+          const payload = env.payload as { seat_index?: number }
+          if (typeof payload.seat_index === 'number') setRequestedHandSeat(payload.seat_index)
+          return
+        }
+
+        if (env.type === 'spectator.hand.result' && isSpectator) {
+          const payload = env.payload as { seat_index?: number; approved?: boolean }
+          setRequestedHandSeat(null)
+          if (typeof payload.seat_index !== 'number') return
+          if (payload.approved) {
+            const previousSeat = approvedHandSeatRef.current
+            if (previousSeat !== null && previousSeat !== payload.seat_index) {
+              const previous = spectatorSeatsRef.current.find((seat) => seat.seat_index === previousSeat)
+              if (previous) {
+                sceneRef.current?.concealSpectatorHand(
+                  previousSeat, previous.hand_tile_count, previous.has_drawn_tile,
+                )
+              }
+            }
+            approvedHandSeatRef.current = payload.seat_index
+            setApprovedHandSeat(payload.seat_index)
+            notify('玩家已同意，现在可以查看他的手牌')
+          } else {
+            notify('玩家拒绝了看牌申请')
+          }
+          return
+        }
+
+        if (env.type === 'spectator.hand.update' && isSpectator) {
+          const payload = env.payload as {
+            seat_index?: number
+            hand_tiles?: number[]
+            drawn_tile?: number | null
+          }
+          if (typeof payload.seat_index === 'number' &&
+              payload.seat_index === approvedHandSeatRef.current &&
+              Array.isArray(payload.hand_tiles)) {
+            sceneRef.current?.revealSpectatorHand(
+              payload.seat_index,
+              payload.hand_tiles,
+              typeof payload.drawn_tile === 'number' ? payload.drawn_tile : null,
+            )
+          }
+          return
+        }
+
+        if (env.type === 'spectator.hand.revoked' && isSpectator) {
+          const payload = env.payload as { seat_index?: number }
+          const previousSeat = approvedHandSeatRef.current
+          if (typeof payload.seat_index === 'number' && previousSeat === payload.seat_index) {
+            const previous = spectatorSeatsRef.current.find((seat) => seat.seat_index === previousSeat)
+            if (previous) {
+              sceneRef.current?.concealSpectatorHand(
+                previousSeat, previous.hand_tile_count, previous.has_drawn_tile,
+              )
+            }
+            approvedHandSeatRef.current = null
+            setApprovedHandSeat(null)
+            notify('玩家已取消看牌许可')
+          }
           return
         }
 
@@ -225,8 +341,29 @@ export default function GamePage() {
             setPhase('active')
             lastScRef.current = snap.state.stage_counter
             const sid = snap.session_id
-            if (sid) { saveStoredSessionId(sid); setSessionIdHint(sid) }
+            if (sid) {
+              if (!isSpectator) saveStoredSessionId(sid)
+              setSessionIdHint(sid)
+            }
             sceneRef.current?.flushFromSnapshot(snap)
+            if (isSpectator) {
+              const seats = snap.seats.map((seat) => ({
+                seat_index: seat.seat_index,
+                player_id: seat.player_id,
+                username: seat.username,
+                hand_tile_count: seat.hand_tile_count,
+                has_drawn_tile: seat.has_drawn_tile,
+              }))
+              spectatorSeatsRef.current = seats
+              setSpectatorSeats(seats)
+              setSpectatorPerspectiveSeat(snap.viewer.seat_index)
+              spectatorPerspectiveSeatRef.current = snap.viewer.seat_index
+              spectatorPerspectivePlayerIdRef.current =
+                seats.find((seat) => seat.seat_index === snap.viewer.seat_index)?.player_id ?? null
+              if (approvedHandSeatRef.current !== null) {
+                sendEnvelope(socket, 'spectator.hand.refresh', {})
+              }
+            }
             // Restart periodic ping after a successful reconnect
             sceneRef.current?.restartPeriodicPing()
             // Capture ratings from snapshot (resume path)
@@ -253,6 +390,19 @@ export default function GamePage() {
           if (isAuthoritativeStart || isAuthoritativeEnd) {
             authoritativeActiveRef.current = true
           }
+          if (isSpectator && isAuthoritativeStart) {
+            const perspectivePlayerId = spectatorPerspectivePlayerIdRef.current
+            const perspectiveSeat = payload.seat_status.find(
+              (seat) => seat.player_id === perspectivePlayerId,
+            )
+            if (perspectivePlayerId !== null &&
+                perspectiveSeat !== undefined &&
+                perspectiveSeat.seat_index !== spectatorPerspectiveSeatRef.current) {
+              sendEnvelope(socket, 'spectator.perspective', {
+                seat_index: perspectiveSeat.seat_index,
+              })
+            }
+          }
           const sc = payload.event.stage_counter
 
           if (sc < lastScRef.current) return // stale
@@ -267,6 +417,24 @@ export default function GamePage() {
             sceneRef.current?.handlePlayerResumed(payload.event.actor_seat)
           }
           sceneRef.current?.handleEvent(payload)
+          if (isSpectator) {
+            const seats = spectatorSeatsRef.current.map((seat) => {
+              const latest = payload.seat_status.find((item) => item.seat_index === seat.seat_index)
+              return latest
+                ? {
+                    ...seat,
+                    username: latest.username ?? seat.username,
+                    hand_tile_count: latest.hand_tile_count,
+                    has_drawn_tile: latest.has_drawn_tile,
+                  }
+                : seat
+            })
+            spectatorSeatsRef.current = seats
+            setSpectatorSeats(seats)
+            if (approvedHandSeatRef.current !== null) {
+              sendEnvelope(socket, 'spectator.hand.refresh', {})
+            }
+          }
           // Capture ratings from start/end events
           const ratingsPayload = (env.payload as Record<string, unknown>)?.ratings
           if (Array.isArray(ratingsPayload)) {
@@ -277,7 +445,7 @@ export default function GamePage() {
             const rArr = ratingsPayload as Array<{ player_id: number; mu?: number; sigma?: number; points?: number; level?: number }>
             const fArr = finalRatingsPayload as Array<{ player_id: number; mu?: number; sigma?: number; points?: number; level?: number }>
             const myId = auth?.player.player_id
-            if (myId) {
+            if (!isSpectator && myId) {
               const initMe = rArr.find(r => r.player_id === myId)
               const finalMe = fArr.find(r => r.player_id === myId)
               if (initMe && finalMe) {
@@ -335,6 +503,7 @@ export default function GamePage() {
           const errPayload = env.payload as { code?: string; message?: string }
           const msg = errPayload.message ?? '牌桌错误'
           notify(msg)
+          if (isSpectator) setRequestedHandSeat(null)
           if (errPayload.code === 'not_found') {
             clearStoredSessionId()
             setSessionIdHint(null)
@@ -378,6 +547,18 @@ export default function GamePage() {
       socket.onclose = () => {
         if (socketRef.current === socket) socketRef.current = null
         if (disposedRef.current || intentionalClose || gameEndedRef.current) return
+        if (isSpectator) {
+          const previousSeat = approvedHandSeatRef.current
+          const previous = spectatorSeatsRef.current.find((seat) => seat.seat_index === previousSeat)
+          if (previousSeat !== null && previous) {
+            sceneRef.current?.concealSpectatorHand(
+              previousSeat, previous.hand_tile_count, previous.has_drawn_tile,
+            )
+          }
+          approvedHandSeatRef.current = null
+          setApprovedHandSeat(null)
+          setRequestedHandSeat(null)
+        }
         setPhase('loading')
         notify('连接已断开，正在重连……')
         let retries = 0
@@ -403,10 +584,52 @@ export default function GamePage() {
       socketRef.current?.close()
       socketRef.current = null
     }
-  }, [sessionIdHint, token, sceneReady])
+  }, [sessionIdHint, token, sceneReady, isSpectator])
 
   // ── Helpers ──────────────────────────────────────────────────
   function notify(msg: string) { setNotification(msg); setShowNotif(true); setTimeout(() => setShowNotif(false), 3000) }
+
+  function requestSpectatorHand(seatIndex: number) {
+    const socket = socketRef.current
+    if (!isSpectator || !socket || socket.readyState !== WebSocket.OPEN) return
+    sendEnvelope(socket, 'spectator.hand.request', { seat_index: seatIndex })
+    setRequestedHandSeat(seatIndex)
+  }
+
+  function changeSpectatorPerspective(seatIndex: number) {
+    const socket = socketRef.current
+    if (!isSpectator || !socket || socket.readyState !== WebSocket.OPEN) return
+    spectatorPerspectivePlayerIdRef.current =
+      spectatorSeatsRef.current.find((seat) => seat.seat_index === seatIndex)?.player_id ?? null
+    sendEnvelope(socket, 'spectator.perspective', { seat_index: seatIndex })
+  }
+
+  function approveSpectatorHand(request: SpectatorHandRequest) {
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    sendEnvelope(socket, 'spectator.hand.respond', {
+      request_id: request.request_id,
+      approved: true,
+    })
+    setSpectatorHandRequests((current) => (
+      current.filter((item) => item.request_id !== request.request_id)
+    ))
+    setGrantedSpectatorSeats((current) => (
+      current.includes(request.seat_index) ? current : [...current, request.seat_index]
+    ))
+  }
+
+  function revokeSpectatorHands() {
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN || sessionIdHint == null) return
+    for (const seatIndex of grantedSpectatorSeats) {
+      sendEnvelope(socket, 'spectator.hand.revoke', {
+        session_id: sessionIdHint,
+        seat_index: seatIndex,
+      })
+    }
+    setGrantedSpectatorSeats([])
+  }
 
   const isVirtualPlayer = (playerId: number) => playerId <= 0
 
@@ -439,6 +662,24 @@ export default function GamePage() {
           }
         })
       return sortRatingCards(pendingCards)
+    }
+    if (isSpectator && spectatorSeats.length > 0) {
+      const spectatorCards = spectatorSeats
+        .filter((seat) => seat.player_id !== null)
+        .map((seat) => {
+          const playerId = seat.player_id as number
+          const fromRatings = gameRatings.find((rating) => rating.player_id === playerId)
+          return {
+            player_id: playerId,
+            username: seat.username ?? fromRatings?.username,
+            mu: fromRatings?.mu,
+            tau: fromRatings?.tau,
+            sigma: fromRatings?.sigma,
+            points: fromRatings?.points,
+            level: fromRatings?.level,
+          }
+        })
+      return sortRatingCards(spectatorCards)
     }
     return sortRatingCards(gameRatings)
   })()
@@ -478,6 +719,20 @@ export default function GamePage() {
     )
   }
 
+  if (isSpectator && !sessionIdHint) {
+    return (
+      <div className="game-blocked">
+        <div className="game-blocked-card">
+          <h1>找不到牌桌</h1>
+          <p>请从大厅选择一场进行中的牌局。</p>
+          <div className="game-blocked-actions">
+            <button onClick={() => navigate('/')}>返回大厅</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ── Render ───────────────────────────────────────────────────
   return (
     <div className="mahjongGame" style={{ background: sceneAppearance.backgroundColorOutside }}>
@@ -486,6 +741,21 @@ export default function GamePage() {
       <div className="game-page__layout" style={{ background: sceneAppearance.backgroundColorOutside }}>
         <section className="game-page__board-panel">
           <div className="game-page__stage-shell" style={{ background: sceneAppearance.backgroundColorTable }}>
+            {!isSpectator && spectatorHandRequests.length > 0 && (
+              <div className="spectator-hand-consent" role="dialog" aria-modal="true" aria-label="看牌申请">
+                <strong>看牌申请</strong>
+                <span>{spectatorHandRequests[0].spectator_username} 申请查看你的手牌</span>
+                <div>
+                  <button
+                    type="button"
+                    className="is-primary"
+                    onClick={() => approveSpectatorHand(spectatorHandRequests[0])}
+                  >
+                    同意
+                  </button>
+                </div>
+              </div>
+            )}
             <div ref={stageRef} className="game-stage" />
             {phase === 'loading' && (
               <div className="replay-stage-overlay">
@@ -496,25 +766,64 @@ export default function GamePage() {
         </section>
         <aside className="game-page__sidebar">
           <div className={`game-page__ratings-area${ratingsExpanded ? ' is-expanded' : ''}`}>
-            {sidebarCards.length > 0 && sidebarCards.map((r) => (
-              <div className="game-page__sidebar-card" key={r.player_id}>
-                <div className="player-name">
-                  {r.username || (r.player_id > 0 ? `#${r.player_id}` : 'N/A')}
+            {sidebarCards.length > 0 && sidebarCards.map((r) => {
+              const seat = isSpectator
+                ? spectatorSeats.find((item) => item.player_id === r.player_id)
+                : undefined
+              const isApproved = seat !== undefined && approvedHandSeat === seat.seat_index
+              const isPending = seat !== undefined && requestedHandSeat === seat.seat_index
+              const isPerspective = seat !== undefined && spectatorPerspectiveSeat === seat.seat_index
+              return (
+                <div className="game-page__sidebar-card" key={r.player_id}>
+                  <div className="player-name">
+                    {r.username || (r.player_id > 0 ? `#${r.player_id}` : 'N/A')}
+                  </div>
+                  {r.points !== undefined && (
+                    <div className="player-rating">
+                      {rankToChinese(r.level ?? 0)} · {r.points.toFixed(2)}pts
+                    </div>
+                  )}
+                  {r.mu !== undefined && (
+                    <div className="player-rating">
+                      R {r.mu.toFixed(2)}±{r.tau?.toFixed(2)} · σ {r.sigma?.toFixed(2)}
+                    </div>
+                  )}
+                  {isSpectator && seat !== undefined && (
+                    <div className="spectator-player-actions">
+                      {r.player_id > 0 && (
+                        <button
+                          type="button"
+                          className={`spectator-hand-request${isApproved ? ' is-approved' : ''}`}
+                          disabled={isApproved || requestedHandSeat !== null}
+                          onClick={() => requestSpectatorHand(seat.seat_index)}
+                        >
+                          {isApproved ? '已允许看牌' : isPending ? '等待同意…' : '申请看牌'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className={`spectator-perspective-button${isPerspective ? ' is-active' : ''}`}
+                        disabled={isPerspective}
+                        onClick={() => changeSpectatorPerspective(seat.seat_index)}
+                      >
+                        {isPerspective ? '当前视角' : '切换视角'}
+                      </button>
+                    </div>
+                  )}
                 </div>
-                {r.points !== undefined && (
-                  <div className="player-rating">
-                    {rankToChinese(r.level ?? 0)} · {r.points.toFixed(2)}pts
-                  </div>
-                )}
-                {r.mu !== undefined && (
-                  <div className="player-rating">
-                    R {r.mu.toFixed(2)}±{r.tau?.toFixed(2)} · σ {r.sigma?.toFixed(2)}
-                  </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
           <div className="game-page__sidebar-bottom-row">
+            {!isSpectator && grantedSpectatorSeats.length > 0 && (
+              <button
+                type="button"
+                className="scene-appearance-toggle__button"
+                onClick={revokeSpectatorHands}
+              >
+                取消看牌许可
+              </button>
+            )}
             {sidebarCards.length > 0 && (
               <button
                 type="button"

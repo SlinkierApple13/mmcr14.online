@@ -1169,6 +1169,8 @@ std::string_view WebSocketRoutePath(WebSocketRoute route) {
 			return "/ws/lobby";
 		case WebSocketRoute::kGame:
 			return "/ws/game";
+		case WebSocketRoute::kSpectate:
+			return "/ws/spectate";
 		case WebSocketRoute::kReplay:
 			return "/ws/replay";
 	}
@@ -1177,6 +1179,9 @@ std::string_view WebSocketRoutePath(WebSocketRoute route) {
 }
 
 WebSocketRoute ResolveWebSocketRoute(const drogon::HttpRequestPtr& request) {
+	if (request->path() == WebSocketRoutePath(WebSocketRoute::kSpectate)) {
+		return WebSocketRoute::kSpectate;
+	}
 	if (request->path() == WebSocketRoutePath(WebSocketRoute::kReplay)) {
 		return WebSocketRoute::kReplay;
 	}
@@ -1213,7 +1218,7 @@ std::optional<WebSocketRoute> ClassifyInboundMessageRoute(std::string_view type)
 	}
 
 	if (type == "session.join" || type == "session.leave" || type == "queue.ready" ||
-		type == "game.input" || type == "resume.ack") {
+			type == "game.input" || type == "resume.ack" || type == "spectator.hand.revoke") {
 		return WebSocketRoute::kGame;
 	}
 
@@ -1225,11 +1230,30 @@ std::optional<WebSocketRoute> ClassifyOutboundMessageRoute(const Json::Value& me
 	if (!type.has_value()) {
 		return std::nullopt;
 	}
+	if (*type == "spectator.hand.request") {
+		return WebSocketRoute::kGame;
+	}
+	if (type->rfind("spectator.hand.", 0) == 0) {
+		return WebSocketRoute::kSpectate;
+	}
 
 	if (*type == "session.snapshot") {
 		auto phase = FindPayloadPhaseString(message);
 		if (phase == "pending" || phase == "active") {
+			const Json::Value* payload = FindField(message, {"payload"});
+			if (payload != nullptr && payload->isObject() &&
+				(*payload)["spectator"].asBool()) {
+				return WebSocketRoute::kSpectate;
+			}
 			return WebSocketRoute::kGame;
+		}
+	}
+
+	if (*type == "game.event") {
+		const Json::Value* payload = FindField(message, {"payload"});
+		if (payload != nullptr && payload->isObject() &&
+			(*payload)["spectator"].asBool()) {
+			return WebSocketRoute::kSpectate;
 		}
 	}
 
@@ -1770,16 +1794,11 @@ util::StatusOr<Json::Value> BuildSessionSnapshotPayload(
 	if (!CanViewActiveSession(*active_session.value(), viewer_player_id)) {
 		return util::Status::NotFound("session not found");
 	}
-	if (!viewer_player_id.has_value()) {
-		for (const auto& seat : active_session.value()->seats()) {
-			const auto player = seat.player.lock();
-			if (player != nullptr && player->player_id != 0) {
-				return active_session.value()->build_snapshot_for_player_id(player->player_id);
-			}
-		}
-		return util::Status::NotFound("session not found");
+	if (viewer_player_id.has_value() &&
+		ActiveSessionContainsPlayer(*active_session.value(), *viewer_player_id)) {
+		return active_session.value()->build_snapshot_for_player_id(*viewer_player_id);
 	}
-	return active_session.value()->build_snapshot_for_player_id(*viewer_player_id);
+	return active_session.value()->build_snapshot_for_spectator();
 }
 
 util::StatusOr<Json::Value> BuildCreatedSessionSnapshotPayload(
