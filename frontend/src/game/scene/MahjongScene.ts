@@ -196,10 +196,15 @@ export class MahjongScene {
     this.presentationMode = mode
   }
 
-  revealSpectatorHand(absoluteSeat: number, handTiles: number[], drawnTile: number | null): void {
+  revealSpectatorHand(
+    absoluteSeat: number,
+    handTiles: number[],
+    drawnTile: number | null,
+    sort = true,
+  ): void {
     if (this.presentationMode !== 'spectator') return
     const localDir = transDir(absoluteSeat, this.selfDir)
-    this.hands[localDir]?.revealHand(handTiles, drawnTile)
+    this.hands[localDir]?.revealHand(handTiles, drawnTile, sort)
   }
 
   concealSpectatorHand(absoluteSeat: number, handTileCount: number, hasDrawnTile: boolean): void {

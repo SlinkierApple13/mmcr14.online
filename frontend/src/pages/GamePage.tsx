@@ -25,6 +25,7 @@ import { rankToChinese } from '../lib/chinese'
 import './GamePage.css'
 
 const END_RESULTS_DELAY_MS = 3000
+const PRIVATE_DRAW_EVENTS = new Set(['predraw', 'draw_tile'])
 
 type RatingCard = {
   player_id: number
@@ -125,6 +126,8 @@ export default function GamePage() {
   const [spectatorPerspectiveSeat, setSpectatorPerspectiveSeat] = useState(0)
   const spectatorPerspectiveSeatRef = useRef(0)
   const spectatorPerspectivePlayerIdRef = useRef<number | null>(null)
+  const pendingAuthorizedDrawEventRef = useRef<GameEventPayload | null>(null)
+  const spectatorPredrawInProgressRef = useRef(false)
   const [spectatorManagement, setSpectatorManagement] = useState<SpectatorManagementEntry[]>([])
   const spectatorManagementPendingIdsRef = useRef<Set<string>>(new Set())
 
@@ -292,6 +295,7 @@ export default function GamePage() {
           const payload = env.payload as {
             seat_index?: number
             target_player_id?: number
+            stage_counter?: number
             hand_tiles?: number[]
             drawn_tile?: number | null
           }
@@ -302,11 +306,51 @@ export default function GamePage() {
               target_player_id: payload.target_player_id,
               seat_index: payload.seat_index,
             })
-            sceneRef.current?.revealSpectatorHand(
-              payload.seat_index,
-              payload.hand_tiles,
-              typeof payload.drawn_tile === 'number' ? payload.drawn_tile : null,
+            const pendingDraw = pendingAuthorizedDrawEventRef.current
+            const sameStage = pendingDraw !== null &&
+              payload.stage_counter === pendingDraw.event.stage_counter &&
+              payload.seat_index === pendingDraw.event.actor_seat
+            const hasPrivateDrawData = sameStage && (
+              (pendingDraw.event.kind === 'draw_tile' && typeof payload.drawn_tile === 'number') ||
+              (pendingDraw.event.kind === 'predraw' && payload.hand_tiles.length >=
+                ((pendingDraw.event.ui64_value ?? 0) < 12 ? 4 : 1))
             )
+            if (hasPrivateDrawData) {
+              const kind = pendingDraw.event.kind
+              const count = kind === 'predraw'
+                ? ((pendingDraw.event.ui64_value ?? 0) < 12 ? 4 : 1)
+                : 0
+              const privateEvent = kind === 'draw_tile'
+                ? { ...pendingDraw.event, tile: payload.drawn_tile ?? undefined }
+                : {
+                    ...pendingDraw.event,
+                    drawn_tiles: payload.hand_tiles.slice(-count),
+                  }
+              pendingAuthorizedDrawEventRef.current = null
+              sceneRef.current?.handleEvent({
+                ...pendingDraw,
+                event: privateEvent,
+                reveal_all_hands: true,
+              })
+              if (kind === 'predraw' && pendingDraw.event.ui64_value === 15) {
+                spectatorPredrawInProgressRef.current = false
+              }
+            } else {
+              if (pendingDraw !== null && typeof payload.stage_counter === 'number' &&
+                  payload.stage_counter < pendingDraw.event.stage_counter) {
+                return
+              }
+              if (pendingDraw !== null && typeof payload.stage_counter === 'number' &&
+                  payload.stage_counter >= pendingDraw.event.stage_counter) {
+                pendingAuthorizedDrawEventRef.current = null
+              }
+              sceneRef.current?.revealSpectatorHand(
+                payload.seat_index,
+                payload.hand_tiles,
+                typeof payload.drawn_tile === 'number' ? payload.drawn_tile : null,
+                !spectatorPredrawInProgressRef.current,
+              )
+            }
           }
           return
         }
@@ -379,6 +423,7 @@ export default function GamePage() {
 
         // ── session.snapshot ──────────────────────────────────
         if (env.type === 'session.snapshot') {
+          pendingAuthorizedDrawEventRef.current = null
           const snap = env.payload as SessionSnapshot
           if (snap.phase === 'pending') {
             authoritativeActiveRef.current = false
@@ -395,6 +440,9 @@ export default function GamePage() {
             setPendingSnapshot(null)
             setPhase('active')
             lastScRef.current = snap.state.stage_counter
+            spectatorPredrawInProgressRef.current = snap.state.last_event_kind === 'start' ||
+              (snap.state.last_event_kind === 'predraw' &&
+                (snap.result_event?.ui64_value ?? 15) < 15)
             const sid = snap.session_id
             if (sid) {
               if (!isSpectator) saveStoredSessionId(sid)
@@ -478,7 +526,26 @@ export default function GamePage() {
           if (payload.category === 'transition' && payload.event.kind === 'player_resumed') {
             sceneRef.current?.handlePlayerResumed(payload.event.actor_seat)
           }
-          sceneRef.current?.handleEvent(payload)
+          const accessBeforeEvent = approvedHandAccessRef.current
+          const actorBeforeEvent = payload.seat_status.find(
+            (seat) => seat.seat_index === payload.event.actor_seat,
+          )
+          const authorizedPrivateDraw = isSpectator &&
+            payload.category === 'transition' &&
+            actorBeforeEvent?.player_id === accessBeforeEvent?.target_player_id &&
+            PRIVATE_DRAW_EVENTS.has(payload.event.kind)
+          if (isSpectator && isAuthoritativeStart) {
+            spectatorPredrawInProgressRef.current = true
+          }
+          if (authorizedPrivateDraw) {
+            pendingAuthorizedDrawEventRef.current = payload
+          } else {
+            sceneRef.current?.handleEvent(payload)
+            if (isSpectator && payload.event.kind === 'predraw' &&
+                payload.event.ui64_value === 15) {
+              spectatorPredrawInProgressRef.current = false
+            }
+          }
           if (isSpectator) {
             const seats = spectatorSeatsRef.current.map((seat) => {
               const latest = payload.seat_status.find((item) => item.seat_index === seat.seat_index)
@@ -505,7 +572,9 @@ export default function GamePage() {
                   seat_index: targetSeat.seat_index,
                 })
               }
-              sendEnvelope(socket, 'spectator.hand.refresh', {})
+              if (authorizedPrivateDraw) {
+                sendEnvelope(socket, 'spectator.hand.refresh', {})
+              }
             }
           }
           // Capture ratings from start/end events
@@ -681,6 +750,7 @@ export default function GamePage() {
   function notify(msg: string) { setNotification(msg); setShowNotif(true); setTimeout(() => setShowNotif(false), 3000) }
 
   function syncSpectatorHandAccess(access: SpectatorHandAccess | null) {
+    if (access === null) pendingAuthorizedDrawEventRef.current = null
     approvedHandAccessRef.current = access
     setApprovedHandAccess(access)
   }

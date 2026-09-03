@@ -315,27 +315,29 @@ export class Hand extends Container {
     })
   }
 
-  revealHand(tiles: number[], drawnTile: number | null = null): void {
+  revealHand(tiles: number[], drawnTile: number | null = null, sort = true): void {
     this.discardIndex = -1
-    const sorted = [...tiles].sort((left, right) => {
-      const leftOffset = (left & 0b11100000) === 0b10100000 ? 1000 : 0
-      const rightOffset = (right & 0b11100000) === 0b10100000 ? 1000 : 0
-      return right + rightOffset - (left + leftOffset)
-    })
+    const ordered = sort
+      ? [...tiles].sort((left, right) => {
+          const leftOffset = (left & 0b11100000) === 0b10100000 ? 1000 : 0
+          const rightOffset = (right & 0b11100000) === 0b10100000 ? 1000 : 0
+          return right + rightOffset - (left + leftOffset)
+        })
+      : [...tiles]
 
-    while (this.rightList.length > sorted.length) {
+    while (this.rightList.length > ordered.length) {
       const extra = this.rightList.pop()
       if (!extra) break
       extra.removeFromParent()
       extra.destroy({ children: true })
     }
-    while (this.rightList.length < sorted.length) {
+    while (this.rightList.length < ordered.length) {
       this.addRightList(Tile.newInvisible(0))
     }
 
-    for (let i = 0; i < sorted.length; i += 1) {
+    for (let i = 0; i < ordered.length; i += 1) {
       const tile = this.rightList[i]
-      tile.updateTid(sorted[i])
+      tile.updateTid(ordered[i])
       tile.show()
     }
 
@@ -357,7 +359,7 @@ export class Hand extends Container {
       this.drawnTile = null
     }
 
-    this.updateDisplay(false, false, false, false, false)
+    this.updateDisplay(false, false, false, false, sort)
   }
 
   concealHand(tileCount: number, hasDrawnTile: boolean): void {
