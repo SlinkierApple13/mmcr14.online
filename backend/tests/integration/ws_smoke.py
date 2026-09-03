@@ -454,16 +454,22 @@ def main():
                     unauthorized_spectator_ws = WebSocketClient(
                         f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}"
                     )
-                    unauthorized_error, _ = unauthorized_spectator_ws.expect_json(
-                        lambda message: message.get("type") == "error"
-                        and message.get("payload", {}).get("code") == "unauthorized",
-                        2.0,
-                        "spectator auth rejection",
-                    )
-                    assert_true(
-                        unauthorized_error.get("payload", {}).get("code") == "unauthorized",
-                        f"unexpected unauthorized spectate response: {unauthorized_error}",
-                    )
+                    try:
+                        unauthorized_error, _ = unauthorized_spectator_ws.expect_json(
+                            lambda message: message.get("type") == "error"
+                            and message.get("payload", {}).get("code") == "unauthorized",
+                            2.0,
+                            "spectator auth rejection",
+                        )
+                        assert_true(
+                            unauthorized_error.get("payload", {}).get("code") == "unauthorized",
+                            f"unexpected unauthorized spectate response: {unauthorized_error}",
+                        )
+                    except AssertionError as exc:
+                        assert_true(
+                            "connection closed" in str(exc),
+                            f"unexpected unauthorized spectate result: {exc}",
+                        )
                     unauthorized_spectator_ws.close()
 
                     spectator_ws = WebSocketClient(
@@ -542,17 +548,32 @@ def main():
                         f"ws://{args.host}:{args.port}/ws/game?session_id={session_id}",
                         tokens[0],
                     )
-                    player_hand_request, _ = game_sockets[0].expect_json(
-                        lambda message: message.get("type") == "spectator.hand.request",
+                    player_management, _ = game_sockets[0].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management"
+                        and any(
+                            entry.get("status") == "pending"
+                            for entry in message.get("payload", {}).get("entries", [])
+                        ),
                         2.0,
-                        "replayed player hand consent request",
+                        "replayed spectator management state",
                     )
+                    pending_entries = [
+                        entry
+                        for entry in player_management.get("payload", {}).get("entries", [])
+                        if entry.get("status") == "pending"
+                    ]
+                    assert_true(len(pending_entries) == 1, f"unexpected pending management: {player_management}")
+                    player_hand_request = pending_entries[0]
                     assert_true(
-                        player_hand_request.get("payload", {}).get("spectator_username")
+                        player_hand_request.get("spectator_username")
                         == f"ws_smoke_{os.getpid()}_4",
                         f"spectator username missing from consent request: {player_hand_request}",
                     )
-                    hand_request_id = player_hand_request.get("payload", {}).get("request_id")
+                    assert_true(
+                        0 < player_hand_request.get("expires_in_ms", 0) <= 5000,
+                        f"invalid pending request expiry: {player_hand_request}",
+                    )
+                    hand_request_id = player_hand_request.get("request_id")
                     assert_true(isinstance(hand_request_id, str), f"missing hand request id: {player_hand_request}")
                     game_sockets[0].send_json(
                         {
@@ -569,6 +590,25 @@ def main():
                     assert_true(
                         approval.get("payload", {}).get("approved") is True,
                         f"unexpected approval response: {approval}",
+                    )
+                    target_player_id = approval.get("payload", {}).get("target_player_id")
+                    assert_true(
+                        isinstance(target_player_id, int),
+                        f"approved grant missing target player: {approval}",
+                    )
+                    grant_state, _ = game_sockets[0].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management"
+                        and any(
+                            entry.get("status") == "approved"
+                            for entry in message.get("payload", {}).get("entries", [])
+                        ),
+                        2.0,
+                        "authoritative player grant state",
+                    )
+                    assert_true(
+                        len(grant_state.get("payload", {}).get("entries", [])) == 1
+                        and grant_state["payload"]["entries"][0].get("status") == "approved",
+                        f"unexpected player grant state: {grant_state}",
                     )
                     revealed_hand, _ = spectator_ws.expect_json(
                         lambda message: message.get("type") == "spectator.hand.update",
@@ -627,18 +667,108 @@ def main():
                         f"unexpected rate limit response: {rate_error}",
                     )
 
+                    spectator_ws.close()
+                    spectator_ws = WebSocketClient(
+                        f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}",
+                        tokens[4],
+                    )
+                    restored_snapshot, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "session.snapshot",
+                        2.0,
+                        "spectator snapshot with restored hand grant",
+                    )
+                    restored_access = restored_snapshot.get("payload", {}).get("hand_access", {})
+                    assert_true(
+                        restored_access.get("granted") is True
+                        and restored_access.get("target_player_id") == target_player_id
+                        and restored_access.get("seat_index") == 0,
+                        f"spectator grant was not restored: {restored_snapshot}",
+                    )
+                    restored_hand, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.update",
+                        2.0,
+                        "restored spectator hand update",
+                    )
+                    assert_true(
+                        restored_hand.get("payload", {}).get("target_player_id") == target_player_id,
+                        f"restored hand targets wrong player: {restored_hand}",
+                    )
+
+                    spectator_ws.send_json(
+                        {
+                            "type": "spectator.perspective",
+                            "requestId": "perspective-with-grant",
+                            "payload": {"seat_index": 2},
+                        }
+                    )
+                    granted_perspective, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "session.snapshot"
+                        and message.get("requestId") == "perspective-with-grant",
+                        2.0,
+                        "perspective snapshot with hand grant",
+                    )
+                    perspective_access = granted_perspective.get("payload", {}).get("hand_access", {})
+                    assert_true(
+                        perspective_access.get("granted") is True
+                        and perspective_access.get("target_player_id") == target_player_id,
+                        f"perspective change lost hand grant: {granted_perspective}",
+                    )
+                    spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.update"
+                        and message.get("payload", {}).get("target_player_id") == target_player_id,
+                        2.0,
+                        "hand update after perspective change",
+                    )
+
+                    game_sockets[0].close()
+                    game_sockets[0] = WebSocketClient(
+                        f"ws://{args.host}:{args.port}/ws/game?session_id={session_id}",
+                        tokens[0],
+                    )
+                    restored_player_grants, _ = game_sockets[0].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management",
+                        2.0,
+                        "player grant state after reconnect",
+                    )
+                    assert_true(
+                        len(restored_player_grants.get("payload", {}).get("entries", [])) == 1
+                        and restored_player_grants["payload"]["entries"][0].get("status") == "approved",
+                        f"player grant state was not restored: {restored_player_grants}",
+                    )
+
+                    approved_spectator_id = restored_player_grants["payload"]["entries"][0].get(
+                        "spectator_player_id"
+                    )
+                    assert_true(
+                        isinstance(approved_spectator_id, int),
+                        f"approved spectator id missing: {restored_player_grants}",
+                    )
+
                     game_sockets[0].send_json(
                         {
                             "type": "spectator.hand.revoke",
-                            "requestId": "revoke-seat-zero",
-                            "payload": {"session_id": session_id, "seat_index": 0},
+                            "requestId": "revoke-hand-access",
+                            "payload": {
+                                "session_id": session_id,
+                                "spectator_player_id": approved_spectator_id,
+                            },
                         }
                     )
                     game_sockets[0].expect_json(
-                        lambda message: message.get("requestId") == "revoke-seat-zero"
+                        lambda message: message.get("requestId") == "revoke-hand-access"
                         and message.get("type") == "ack",
                         2.0,
-                        "hand revoke ack",
+                        "revoke hand access ack",
+                    )
+                    cleared_grants, _ = game_sockets[0].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management"
+                        and message.get("payload", {}).get("entries") == [],
+                        2.0,
+                        "cleared player grant state",
+                    )
+                    assert_true(
+                        cleared_grants.get("payload", {}).get("entries") == [],
+                        f"server retained revoked permissions: {cleared_grants}",
                     )
                     revoked_notice, _ = spectator_ws.expect_json(
                         lambda message: message.get("type") == "spectator.hand.revoked"
@@ -689,12 +819,14 @@ def main():
                         2.0,
                         "second spectator hand request pending",
                     )
-                    denied_player_request, _ = game_sockets[1].expect_json(
-                        lambda message: message.get("type") == "spectator.hand.request",
+                    denied_management, _ = game_sockets[1].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management"
+                        and len(message.get("payload", {}).get("entries", [])) == 1,
                         2.0,
                         "second player hand consent request",
                     )
-                    denied_request_id = denied_player_request.get("payload", {}).get("request_id")
+                    denied_player_request = denied_management["payload"]["entries"][0]
+                    denied_request_id = denied_player_request.get("request_id")
                     assert_true(
                         isinstance(denied_request_id, str),
                         f"missing denied hand request id: {denied_player_request}",
@@ -715,6 +847,12 @@ def main():
                         denial.get("payload", {}).get("approved") is False,
                         f"unexpected denial response: {denial}",
                     )
+                    game_sockets[1].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management"
+                        and message.get("payload", {}).get("entries") == [],
+                        2.0,
+                        "management state after explicit denial",
+                    )
                     denied_spectator_ws.send_json(
                         {
                             "type": "spectator.hand.refresh",
@@ -731,6 +869,55 @@ def main():
                         denied_refresh.get("type") == "error"
                         and denied_refresh.get("payload", {}).get("code") == "hand_access_not_granted",
                         f"denied spectator received hand access: {denied_refresh}",
+                    )
+
+                    denied_spectator_ws.close()
+                    denied_spectator_ws = WebSocketClient(
+                        f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}",
+                        tokens[4],
+                    )
+                    denied_spectator_ws.expect_json(
+                        lambda message: message.get("type") == "session.snapshot",
+                        2.0,
+                        "auto-deny spectator snapshot",
+                    )
+                    denied_spectator_ws.send_json(
+                        {
+                            "type": "spectator.hand.request",
+                            "requestId": "request-seat-two-auto-deny",
+                            "payload": {"seat_index": 2},
+                        }
+                    )
+                    denied_spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.pending",
+                        2.0,
+                        "auto-deny hand request pending",
+                    )
+                    auto_pending, _ = game_sockets[2].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management"
+                        and len(message.get("payload", {}).get("entries", [])) == 1,
+                        2.0,
+                        "auto-deny pending management state",
+                    )
+                    assert_true(
+                        auto_pending["payload"]["entries"][0].get("status") == "pending",
+                        f"unexpected auto-deny pending state: {auto_pending}",
+                    )
+                    auto_denial, _ = denied_spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.result"
+                        and message.get("payload", {}).get("approved") is False,
+                        7.0,
+                        "server auto-denial result",
+                    )
+                    assert_true(
+                        auto_denial.get("payload", {}).get("approved") is False,
+                        f"unexpected automatic denial: {auto_denial}",
+                    )
+                    game_sockets[2].expect_json(
+                        lambda message: message.get("type") == "spectator.hand.management"
+                        and message.get("payload", {}).get("entries") == [],
+                        2.0,
+                        "management state after automatic denial",
                     )
 
                 finally:

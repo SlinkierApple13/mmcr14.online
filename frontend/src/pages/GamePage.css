@@ -7,32 +7,6 @@
   background: #999999;
 }
 
-.spectator-hand-consent {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 20;
-  width: min(320px, calc(100% - 24px));
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  box-sizing: border-box;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(4px);
-  color: #202526;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
-}
-
-.spectator-hand-consent > div {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.spectator-hand-consent button,
 .spectator-hand-request,
 .spectator-perspective-button {
   border: 1px solid rgba(0, 0, 0, 0.14);
@@ -43,7 +17,6 @@
   cursor: pointer;
 }
 
-.spectator-hand-consent button.is-primary,
 .spectator-hand-request.is-approved,
 .spectator-perspective-button.is-active {
   border-color: #287a65;
@@ -117,12 +90,12 @@
   display: none;
 }
 
-.spectator-revoke-row {
+.spectator-management-row {
   display: flex;
   padding-top: 4px;
 }
 
-.spectator-revoke-row .scene-appearance-toggle__button {
+.spectator-management-row .scene-appearance-toggle__button {
   width: 100%;
 }
 
@@ -364,6 +337,72 @@
 
 .scene-appearance-toggle__button:hover {
   background: rgba(255, 255, 255, 0.99);
+}
+
+.scene-appearance-toggle__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.spectator-management-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.spectator-management-empty {
+  margin: 0;
+  color: #697273;
+  font-size: 13px;
+}
+
+.spectator-management-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spectator-management-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid rgba(96, 96, 96, 0.2);
+  border-radius: 8px;
+  background: rgba(247, 249, 249, 0.92);
+}
+
+.spectator-management-entry > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.spectator-management-entry span {
+  color: #697273;
+  font-size: 12px;
+}
+
+.spectator-management-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.spectator-management-actions button {
+  padding: 6px 8px;
+  border: 1px solid rgba(96, 96, 96, 0.28);
+  border-radius: 7px;
+  background: #fff;
+  color: #1e2425;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.spectator-management-actions button:first-child {
+  border-color: rgba(40, 122, 101, 0.55);
 }
 
 .scene-appearance-toggle.is-open .scene-appearance-toggle__button {

@@ -290,19 +290,6 @@ public:
 		return spectator_session_id_;
 	}
 
-	void set_revealed_hand(int seat, std::int64_t player_id) noexcept {
-		revealed_seat_.store(seat);
-		revealed_player_id_.store(player_id);
-	}
-
-	[[nodiscard]] int revealed_seat() const noexcept {
-		return revealed_seat_.load();
-	}
-
-	[[nodiscard]] std::int64_t revealed_player_id() const noexcept {
-		return revealed_player_id_.load();
-	}
-
 	[[nodiscard]] std::int64_t last_hand_request_ms() const noexcept {
 		return last_hand_request_ms_.load();
 	}
@@ -323,8 +310,6 @@ private:
 	std::shared_ptr<auth::PlayerProfile> player_;
 	WebSocketRoute route_{WebSocketRoute::kLobby};
 	std::optional<std::int64_t> spectator_session_id_;
-	std::atomic<int> revealed_seat_{-1};
-	std::atomic<std::int64_t> revealed_player_id_{0};
 	std::atomic<std::int64_t> last_hand_request_ms_{0};
 	bool registered_with_hub_{false};
 };

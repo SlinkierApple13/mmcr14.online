@@ -131,6 +131,11 @@ export interface ActiveSessionSnapshot {
   result_event?: GameEventSnapshot | null
   spectator?: boolean
   reveal_all_hands?: boolean
+  hand_access?: {
+    granted: boolean
+    target_player_id?: number
+    seat_index?: number
+  }
 }
 
 export type SessionSnapshot = PendingSnapshot | ActiveSessionSnapshot

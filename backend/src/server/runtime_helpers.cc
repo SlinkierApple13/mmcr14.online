@@ -1230,7 +1230,7 @@ std::optional<WebSocketRoute> ClassifyOutboundMessageRoute(const Json::Value& me
 	if (!type.has_value()) {
 		return std::nullopt;
 	}
-	if (*type == "spectator.hand.request") {
+	if (*type == "spectator.hand.management") {
 		return WebSocketRoute::kGame;
 	}
 	if (type->rfind("spectator.hand.", 0) == 0) {
