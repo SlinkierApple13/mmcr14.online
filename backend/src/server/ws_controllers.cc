@@ -35,6 +35,11 @@ struct PendingSpectatorHandRequest {
 	std::chrono::steady_clock::time_point created_at;
 };
 
+// Minimum interval between two spectator hand requests on one connection.
+constexpr std::int64_t kSpectatorHandRequestCooldownMs = 3000;
+// Maximum number of unanswered hand requests one player may receive at a time.
+constexpr std::size_t kMaxOutstandingHandRequestsPerPlayer = 4;
+
 class StatsWebSocketController final
 	: public drogon::WebSocketController<StatsWebSocketController, false> {
 public:
@@ -653,6 +658,17 @@ public:
 			handleSpectatorHandResponse(connection, context, root, request_id);
 			return;
 		}
+		if (message_type.has_value() && *message_type == "spectator.hand.revoke") {
+			if (context->route() != WebSocketRoute::kGame) {
+				state_->SendWebSocketJson(
+					connection,
+					MakeWebSocketError(
+						"wrong_socket", "取消看牌许可只能在对局连接中发送", request_id));
+				return;
+			}
+			handleSpectatorHandRevoke(connection, context, root, request_id);
+			return;
+		}
 		if (message_type.has_value()) {
 			auto expected_route = ClassifyInboundMessageRoute(*message_type);
 			if (expected_route.has_value() && *expected_route != context->route()) {
@@ -688,6 +704,18 @@ public:
 				 const drogon::WebSocketConnectionPtr& connection) override {
 		const auto route = ResolveWebSocketRoute(request);
 		if (route == WebSocketRoute::kSpectate) {
+			auto authenticated = AuthenticateWebSocketRequest(*state_, request);
+			if (!authenticated.ok()) {
+				state_->SendWebSocketJson(
+					connection,
+					MakeWebSocketError(
+						"unauthorized", authenticated.status().message(), {}),
+					0,
+					std::nullopt,
+					route);
+				connection->forceClose();
+				return;
+			}
 			auto requested_session_id = ExtractWebSocketSessionId(request);
 			if (!requested_session_id.ok() || !requested_session_id.value().has_value()) {
 				const auto message = requested_session_id.ok()
@@ -720,7 +748,10 @@ public:
 			}
 
 			connection->setContext(
-				std::make_shared<GameClientContext>(nullptr, route, session_id));
+				std::make_shared<GameClientContext>(
+					std::make_shared<auth::PlayerProfile>(authenticated.value().player),
+					route,
+					session_id));
 			state_->socket_hub().AddConnection(connection, session_id, route);
 			state_->SendWebSocketJson(
 				connection,
@@ -728,7 +759,7 @@ public:
 					"session.snapshot",
 					active_session.value()->build_snapshot_for_spectator()),
 				0,
-				std::nullopt,
+				authenticated.value().player.player_id,
 				route);
 			return;
 		}
@@ -928,12 +959,12 @@ public:
 
 private:
 	void sendSpectatorError(const drogon::WebSocketConnectionPtr& connection,
-					 std::string code,
+					 std::string_view code,
 					 std::string message,
 					 std::string_view request_id) {
 		state_->SendWebSocketJson(
 			connection,
-			MakeWebSocketError(std::move(code), std::move(message), request_id),
+			MakeWebSocketError(code, std::move(message), request_id),
 			0,
 			std::nullopt,
 			WebSocketRoute::kSpectate);
@@ -1041,15 +1072,24 @@ private:
 		const auto target_player = active_session.value()->seats()[target_seat].player.lock();
 		if (target_player == nullptr || target_player->player_id <= 0) {
 			sendSpectatorError(
-				connection, "not_found", "该座位没有可申请的真人玩家", request_id);
+				connection, "not_found", "no real player available at this seat", request_id);
 			return;
 		}
 		if (!state_->socket_hub().HasLiveConnection(
 				target_player->player_id, WebSocketRoute::kGame)) {
 			sendSpectatorError(
-				connection, "player_unavailable", "该玩家当前无法处理看牌申请", request_id);
+				connection, "player_unavailable", "player is currently unavailable", request_id);
 			return;
 		}
+
+		const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		if (now_ms - context->last_hand_request_ms() < kSpectatorHandRequestCooldownMs) {
+			sendSpectatorError(
+				connection, "rate_limited", "request rate limit exceeded", request_id);
+			return;
+		}
+		context->mark_hand_request(now_ms);
 
 		std::string hand_request_id;
 		{
@@ -1062,6 +1102,18 @@ private:
 				} else {
 					++it;
 				}
+			}
+			std::size_t outstanding_for_target = 0;
+			for (const auto& [unused, existing] : spectator_hand_requests_) {
+				(void)unused;
+				if (existing.target_player_id == target_player->player_id) {
+					++outstanding_for_target;
+				}
+			}
+			if (outstanding_for_target >= kMaxOutstandingHandRequestsPerPlayer) {
+				sendSpectatorError(
+					connection, "too_many_requests", "too many spectator hand requests for this player, please try again later", request_id);
+				return;
 			}
 			hand_request_id = std::to_string(*session_id) + "-" + std::to_string(++next_hand_request_id_);
 			spectator_hand_requests_.emplace(
@@ -1165,6 +1217,69 @@ private:
 			WebSocketRoute::kSpectate);
 		if (approved) {
 			sendApprovedHand(spectator, spectator_context);
+		}
+		state_->SendWebSocketJson(connection, MakeWebSocketAck(request_id));
+	}
+
+	void handleSpectatorHandRevoke(
+			const drogon::WebSocketConnectionPtr& connection,
+			const std::shared_ptr<GameClientContext>& context,
+			const Json::Value& root,
+			std::string_view request_id) {
+		const Json::Value* payload = FindField(root, {"payload"});
+		const Json::Value* session_value =
+			payload != nullptr && payload->isObject() ? FindField(*payload, {"session_id"}) : nullptr;
+		const Json::Value* seat_value =
+			payload != nullptr && payload->isObject() ? FindField(*payload, {"seat_index"}) : nullptr;
+		if (session_value == nullptr || !session_value->isInt64() ||
+				seat_value == nullptr || !seat_value->isInt()) {
+			state_->SendWebSocketJson(
+				connection,
+				MakeWebSocketError(
+					"invalid_argument", "session_id and seat_index are required", request_id));
+			return;
+		}
+		const std::int64_t session_id = session_value->asInt64();
+		const int seat_index = seat_value->asInt();
+
+		auto active_session = state_->FindActiveSession(session_id);
+		if (!active_session.ok()) {
+			state_->SendWebSocketJson(
+				connection,
+				MakeWebSocketError(
+					StatusCodeName(active_session.status().code()),
+					active_session.status().message(),
+					request_id));
+			return;
+		}
+		const auto& seats = active_session.value()->seats();
+		if (seat_index < 0 || seat_index >= static_cast<int>(seats.size()) ||
+				!seats[seat_index].player.matches(context->player_id())) {
+			state_->SendWebSocketJson(
+				connection,
+				MakeWebSocketError(
+					"forbidden", "invalid seat_index", request_id));
+			return;
+		}
+
+		Json::Value revoked_payload(Json::objectValue);
+		revoked_payload["session_id"] = Json::Int64(session_id);
+		revoked_payload["seat_index"] = seat_index;
+		for (const auto& spectator_connection :
+				state_->socket_hub().LiveConnectionsForPlayer(
+					session_id, WebSocketRoute::kSpectate)) {
+			const auto spectator_context = spectator_connection->getContext<GameClientContext>();
+			if (spectator_context == nullptr ||
+					spectator_context->revealed_seat() != seat_index) {
+				continue;
+			}
+			spectator_context->set_revealed_hand(-1, 0);
+			state_->SendWebSocketJson(
+				spectator_connection,
+				MakeWebSocketEnvelope("spectator.hand.revoked", revoked_payload),
+				0,
+				std::nullopt,
+				WebSocketRoute::kSpectate);
 		}
 		state_->SendWebSocketJson(connection, MakeWebSocketAck(request_id));
 	}

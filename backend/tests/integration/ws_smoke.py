@@ -451,8 +451,24 @@ def main():
                         f"lobby update should stay immediate relative to game delay: lobby={lobby_elapsed_ms:.1f}ms delay={args.network_delay_ms}ms",
                     )
 
-                    spectator_ws = WebSocketClient(
+                    unauthorized_spectator_ws = WebSocketClient(
                         f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}"
+                    )
+                    unauthorized_error, _ = unauthorized_spectator_ws.expect_json(
+                        lambda message: message.get("type") == "error"
+                        and message.get("payload", {}).get("code") == "unauthorized",
+                        2.0,
+                        "spectator auth rejection",
+                    )
+                    assert_true(
+                        unauthorized_error.get("payload", {}).get("code") == "unauthorized",
+                        f"unexpected unauthorized spectate response: {unauthorized_error}",
+                    )
+                    unauthorized_spectator_ws.close()
+
+                    spectator_ws = WebSocketClient(
+                        f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}",
+                        tokens[4],
                     )
                     spectator_snapshot, _ = spectator_ws.expect_json(
                         lambda message: message.get("type") == "session.snapshot",
@@ -530,11 +546,19 @@ def main():
                     )
                     revealed_payload = revealed_hand.get("payload", {})
                     assert_true(revealed_payload.get("seat_index") == 0, f"wrong revealed seat: {revealed_hand}")
-                    assert_true(
-                        isinstance(revealed_payload.get("hand_tiles"), list)
-                        and len(revealed_payload["hand_tiles"]) > 0,
-                        f"approved hand tiles missing: {revealed_hand}",
-                    )
+                    if revealed_payload.get("stage_counter", 0) == 0:
+                        # Pre-deal: the consent flow runs before any tiles exist.
+                        assert_true(
+                            revealed_payload.get("hand_tiles") == []
+                            and revealed_payload.get("drawn_tile") is None,
+                            f"unexpected pre-deal hand payload: {revealed_hand}",
+                        )
+                    else:
+                        assert_true(
+                            isinstance(revealed_payload.get("hand_tiles"), list)
+                            and len(revealed_payload["hand_tiles"]) > 0,
+                            f"approved hand tiles missing: {revealed_hand}",
+                        )
 
                     spectator_ws.send_json(
                         {
@@ -554,8 +578,68 @@ def main():
                         f"unexpected refreshed hand: {refreshed_hand}",
                     )
 
+                    spectator_ws.send_json(
+                        {
+                            "type": "spectator.hand.request",
+                            "requestId": "rate-limited-request",
+                            "payload": {"seat_index": 1},
+                        }
+                    )
+                    rate_error, _ = spectator_ws.expect_json(
+                        lambda message: message.get("requestId") == "rate-limited-request",
+                        2.0,
+                        "spectator rate limit rejection",
+                    )
+                    assert_true(
+                        rate_error.get("type") == "error"
+                        and rate_error.get("payload", {}).get("code") == "rate_limited",
+                        f"unexpected rate limit response: {rate_error}",
+                    )
+
+                    game_sockets[0].send_json(
+                        {
+                            "type": "spectator.hand.revoke",
+                            "requestId": "revoke-seat-zero",
+                            "payload": {"session_id": session_id, "seat_index": 0},
+                        }
+                    )
+                    game_sockets[0].expect_json(
+                        lambda message: message.get("requestId") == "revoke-seat-zero"
+                        and message.get("type") == "ack",
+                        2.0,
+                        "hand revoke ack",
+                    )
+                    revoked_notice, _ = spectator_ws.expect_json(
+                        lambda message: message.get("type") == "spectator.hand.revoked"
+                        and message.get("payload", {}).get("seat_index") == 0,
+                        2.0,
+                        "spectator hand revoked notice",
+                    )
+                    assert_true(
+                        revoked_notice.get("payload", {}).get("seat_index") == 0,
+                        f"unexpected revoke notice: {revoked_notice}",
+                    )
+                    spectator_ws.send_json(
+                        {
+                            "type": "spectator.hand.refresh",
+                            "requestId": "refresh-after-revoke",
+                            "payload": {},
+                        }
+                    )
+                    revoked_refresh, _ = spectator_ws.expect_json(
+                        lambda message: message.get("requestId") == "refresh-after-revoke",
+                        2.0,
+                        "post-revoke hand refresh",
+                    )
+                    assert_true(
+                        revoked_refresh.get("type") == "error"
+                        and revoked_refresh.get("payload", {}).get("code") == "hand_access_not_granted",
+                        f"revoked spectator received hand access: {revoked_refresh}",
+                    )
+
                     denied_spectator_ws = WebSocketClient(
-                        f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}"
+                        f"ws://{args.host}:{args.port}/ws/spectate?session_id={session_id}",
+                        tokens[4],
                     )
                     denied_spectator_ws.expect_json(
                         lambda message: message.get("type") == "session.snapshot",

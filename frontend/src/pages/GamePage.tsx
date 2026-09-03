@@ -114,6 +114,7 @@ export default function GamePage() {
   const [approvedHandSeat, setApprovedHandSeat] = useState<number | null>(null)
   const approvedHandSeatRef = useRef<number | null>(null)
   const [spectatorHandRequests, setSpectatorHandRequests] = useState<SpectatorHandRequest[]>([])
+  const [grantedSpectatorSeats, setGrantedSpectatorSeats] = useState<number[]>([])
 
   // ── Resolve session id from URL changes ───────────────────────
   useEffect(() => {
@@ -183,7 +184,7 @@ export default function GamePage() {
 
   // ── WebSocket ─────────────────────────────────────────────────
   useEffect(() => {
-    if ((!isSpectator && !token) || (isSpectator && !sessionIdHint) || !sceneReady) {
+    if (!token || (isSpectator && !sessionIdHint) || !sceneReady) {
       setPhase('loading')
       authoritativeActiveRef.current = false
       return
@@ -197,7 +198,7 @@ export default function GamePage() {
 
       const url = buildWebSocketUrl(
         isSpectator ? '/ws/spectate' : '/ws/game',
-        isSpectator ? null : token,
+        token,
         sessionIdHint ? { session_id: sessionIdHint } : {},
       )
       const socket = new WebSocket(url)
@@ -293,6 +294,23 @@ export default function GamePage() {
               payload.hand_tiles,
               typeof payload.drawn_tile === 'number' ? payload.drawn_tile : null,
             )
+          }
+          return
+        }
+
+        if (env.type === 'spectator.hand.revoked' && isSpectator) {
+          const payload = env.payload as { seat_index?: number }
+          const previousSeat = approvedHandSeatRef.current
+          if (typeof payload.seat_index === 'number' && previousSeat === payload.seat_index) {
+            const previous = spectatorSeatsRef.current.find((seat) => seat.seat_index === previousSeat)
+            if (previous) {
+              sceneRef.current?.concealSpectatorHand(
+                previousSeat, previous.hand_tile_count, previous.has_drawn_tile,
+              )
+            }
+            approvedHandSeatRef.current = null
+            setApprovedHandSeat(null)
+            notify('玩家已取消看牌许可')
           }
           return
         }
@@ -464,7 +482,7 @@ export default function GamePage() {
             setSessionIdHint(null)
             authoritativeActiveRef.current = false
           }
-          if (!isSpectator && (errPayload.code === 'unauthorized' || errPayload.code === 'kicked')) {
+          if (errPayload.code === 'unauthorized' || errPayload.code === 'kicked') {
             clearStoredAuth()
             clearStoredSessionId()
           }
@@ -561,6 +579,23 @@ export default function GamePage() {
     setSpectatorHandRequests((current) => (
       current.filter((item) => item.request_id !== request.request_id)
     ))
+    if (approved) {
+      setGrantedSpectatorSeats((current) => (
+        current.includes(request.seat_index) ? current : [...current, request.seat_index]
+      ))
+    }
+  }
+
+  function revokeSpectatorHands() {
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN || sessionIdHint == null) return
+    for (const seatIndex of grantedSpectatorSeats) {
+      sendEnvelope(socket, 'spectator.hand.revoke', {
+        session_id: sessionIdHint,
+        seat_index: seatIndex,
+      })
+    }
+    setGrantedSpectatorSeats([])
   }
 
   const isVirtualPlayer = (playerId: number) => playerId <= 0
@@ -618,7 +653,7 @@ export default function GamePage() {
   }, [phase, pendingSnapshot, auth?.player.player_id])
 
   // ── No token ─────────────────────────────────────────────────
-  if (!isSpectator && !token) {
+  if (!token) {
     return (
       <div className="game-blocked">
         <div className="game-blocked-card">
@@ -665,6 +700,15 @@ export default function GamePage() {
           </div>
         </div>
       )}
+      {!isSpectator && spectatorHandRequests.length === 0 && grantedSpectatorSeats.length > 0 && (
+        <div className="spectator-hand-consent" role="dialog" aria-modal="true" aria-label="看牌许可">
+          <strong>看牌许可</strong>
+          <span>有观众正在查看你的手牌，可随时取消许可。</span>
+          <div>
+            <button type="button" onClick={revokeSpectatorHands}>取消看牌许可</button>
+          </div>
+        </div>
+      )}
       {isSpectator && (
         <div className="game-spectator-toolbar">
           <span>观战中</span>
@@ -685,27 +729,28 @@ export default function GamePage() {
         </section>
         <aside className="game-page__sidebar">
           <div className={`game-page__ratings-area${ratingsExpanded ? ' is-expanded' : ''}`}>
-            {sidebarCards.length > 0 && sidebarCards.map((r) => (
-              <div className="game-page__sidebar-card" key={r.player_id}>
-                <div className="player-name">
-                  {r.username || (r.player_id > 0 ? `#${r.player_id}` : 'N/A')}
-                </div>
-                {r.points !== undefined && (
-                  <div className="player-rating">
-                    {rankToChinese(r.level ?? 0)} · {r.points.toFixed(2)}pts
+            {sidebarCards.length > 0 && sidebarCards.map((r) => {
+              const seat = isSpectator
+                ? spectatorSeats.find((item) => item.player_id === r.player_id)
+                : undefined
+              const isApproved = seat !== undefined && approvedHandSeat === seat.seat_index
+              const isPending = seat !== undefined && requestedHandSeat === seat.seat_index
+              return (
+                <div className="game-page__sidebar-card" key={r.player_id}>
+                  <div className="player-name">
+                    {r.username || (r.player_id > 0 ? `#${r.player_id}` : 'N/A')}
                   </div>
-                )}
-                {r.mu !== undefined && (
-                  <div className="player-rating">
-                    R {r.mu.toFixed(2)}±{r.tau?.toFixed(2)} · σ {r.sigma?.toFixed(2)}
-                  </div>
-                )}
-                {isSpectator && (() => {
-                  const seat = spectatorSeats.find((item) => item.player_id === r.player_id)
-                  if (!seat || r.player_id <= 0) return null
-                  const isApproved = approvedHandSeat === seat.seat_index
-                  const isPending = requestedHandSeat === seat.seat_index
-                  return (
+                  {r.points !== undefined && (
+                    <div className="player-rating">
+                      {rankToChinese(r.level ?? 0)} · {r.points.toFixed(2)}pts
+                    </div>
+                  )}
+                  {r.mu !== undefined && (
+                    <div className="player-rating">
+                      R {r.mu.toFixed(2)}±{r.tau?.toFixed(2)} · σ {r.sigma?.toFixed(2)}
+                    </div>
+                  )}
+                  {isSpectator && seat !== undefined && r.player_id > 0 && (
                     <button
                       type="button"
                       className={`spectator-hand-request${isApproved ? ' is-approved' : ''}`}
@@ -714,10 +759,10 @@ export default function GamePage() {
                     >
                       {isApproved ? '已允许看牌' : isPending ? '等待同意…' : '申请看牌'}
                     </button>
-                  )
-                })()}
-              </div>
-            ))}
+                  )}
+                </div>
+              )
+            })}
           </div>
           <div className="game-page__sidebar-bottom-row">
             {sidebarCards.length > 0 && (

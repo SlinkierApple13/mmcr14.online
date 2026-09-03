@@ -1218,7 +1218,7 @@ std::optional<WebSocketRoute> ClassifyInboundMessageRoute(std::string_view type)
 	}
 
 	if (type == "session.join" || type == "session.leave" || type == "queue.ready" ||
-		type == "game.input" || type == "resume.ack") {
+			type == "game.input" || type == "resume.ack" || type == "spectator.hand.revoke") {
 		return WebSocketRoute::kGame;
 	}
 

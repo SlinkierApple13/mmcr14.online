@@ -303,6 +303,14 @@ public:
 		return revealed_player_id_.load();
 	}
 
+	[[nodiscard]] std::int64_t last_hand_request_ms() const noexcept {
+		return last_hand_request_ms_.load();
+	}
+
+	void mark_hand_request(std::int64_t now_ms) noexcept {
+		last_hand_request_ms_.store(now_ms);
+	}
+
 	void mark_registered_with_hub() noexcept {
 		registered_with_hub_ = true;
 	}
@@ -317,6 +325,7 @@ private:
 	std::optional<std::int64_t> spectator_session_id_;
 	std::atomic<int> revealed_seat_{-1};
 	std::atomic<std::int64_t> revealed_player_id_{0};
+	std::atomic<std::int64_t> last_hand_request_ms_{0};
 	bool registered_with_hub_{false};
 };
 
@@ -352,11 +361,11 @@ public:
 	explicit GameSocketHub(DebugTrafficLogger* logger = nullptr);
 
 	void AddConnection(const drogon::WebSocketConnectionPtr& connection,
-			   std::int64_t player_id,
-			   WebSocketRoute route);
+					   std::int64_t player_id,
+					   WebSocketRoute route);
 	[[nodiscard]] bool RemoveConnection(const drogon::WebSocketConnectionPtr& connection,
-								std::int64_t player_id,
-								WebSocketRoute route);
+								        std::int64_t player_id,
+								        WebSocketRoute route);
 	void SendToPlayer(std::int64_t player_id, const Json::Value& message, int delay_ms);
 	void SendToSpectators(std::int64_t session_id, const Json::Value& message, int delay_ms);
 	[[nodiscard]] bool HasLiveConnection(std::int64_t player_id, WebSocketRoute route);
@@ -364,18 +373,16 @@ public:
 				  WebSocketRoute route,
 				  DebugTrafficLogger* logger = nullptr,
 				  const drogon::WebSocketConnection* keep_connection = nullptr);
+        [[nodiscard]] std::vector<drogon::WebSocketConnectionPtr> LiveConnectionsForPlayer(
+                std::int64_t player_id,
+                std::optional<WebSocketRoute> route = std::nullopt);
 
 private:
 	struct ConnectionEntry {
-		std::int64_t player_id{0};
-		WebSocketRoute route{WebSocketRoute::kLobby};
-		std::weak_ptr<drogon::WebSocketConnection> connection;
+			std::int64_t player_id{0};
+			WebSocketRoute route{WebSocketRoute::kLobby};
+			std::weak_ptr<drogon::WebSocketConnection> connection;
 	};
-
-	[[nodiscard]] std::vector<drogon::WebSocketConnectionPtr> LiveConnectionsForPlayer(
-		std::int64_t player_id,
-		std::optional<WebSocketRoute> route = std::nullopt);
-
 	DebugTrafficLogger* logger_{nullptr};
 	std::mutex mutex_;
 	std::vector<ConnectionEntry> connections_;
@@ -412,7 +419,7 @@ public:
 	[[nodiscard]] util::StatusOr<Lease> Acquire();
 	[[nodiscard]] std::size_t size() const noexcept;
 
-	private:
+private:
 	struct Entry {
 		storage::Database database;
 		bool in_use{false};
