@@ -115,6 +115,8 @@ export default function GamePage() {
   const [approvedHandSeat, setApprovedHandSeat] = useState<number | null>(null)
   const approvedHandSeatRef = useRef<number | null>(null)
   const [spectatorPerspectiveSeat, setSpectatorPerspectiveSeat] = useState(0)
+  const spectatorPerspectiveSeatRef = useRef(0)
+  const spectatorPerspectivePlayerIdRef = useRef<number | null>(null)
   const [spectatorHandRequests, setSpectatorHandRequests] = useState<SpectatorHandRequest[]>([])
   const [grantedSpectatorSeats, setGrantedSpectatorSeats] = useState<number[]>([])
 
@@ -355,6 +357,9 @@ export default function GamePage() {
               spectatorSeatsRef.current = seats
               setSpectatorSeats(seats)
               setSpectatorPerspectiveSeat(snap.viewer.seat_index)
+              spectatorPerspectiveSeatRef.current = snap.viewer.seat_index
+              spectatorPerspectivePlayerIdRef.current =
+                seats.find((seat) => seat.seat_index === snap.viewer.seat_index)?.player_id ?? null
               if (approvedHandSeatRef.current !== null) {
                 sendEnvelope(socket, 'spectator.hand.refresh', {})
               }
@@ -384,6 +389,19 @@ export default function GamePage() {
           }
           if (isAuthoritativeStart || isAuthoritativeEnd) {
             authoritativeActiveRef.current = true
+          }
+          if (isSpectator && isAuthoritativeStart) {
+            const perspectivePlayerId = spectatorPerspectivePlayerIdRef.current
+            const perspectiveSeat = payload.seat_status.find(
+              (seat) => seat.player_id === perspectivePlayerId,
+            )
+            if (perspectivePlayerId !== null &&
+                perspectiveSeat !== undefined &&
+                perspectiveSeat.seat_index !== spectatorPerspectiveSeatRef.current) {
+              sendEnvelope(socket, 'spectator.perspective', {
+                seat_index: perspectiveSeat.seat_index,
+              })
+            }
           }
           const sc = payload.event.stage_counter
 
@@ -581,6 +599,8 @@ export default function GamePage() {
   function changeSpectatorPerspective(seatIndex: number) {
     const socket = socketRef.current
     if (!isSpectator || !socket || socket.readyState !== WebSocket.OPEN) return
+    spectatorPerspectivePlayerIdRef.current =
+      spectatorSeatsRef.current.find((seat) => seat.seat_index === seatIndex)?.player_id ?? null
     sendEnvelope(socket, 'spectator.perspective', { seat_index: seatIndex })
   }
 

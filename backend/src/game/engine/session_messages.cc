@@ -485,9 +485,10 @@ Json::Value SerializeVisibleEvent(const Event& event,
 
 Json::Value SerializeSpectatorEvent(const Event& event, std::uint64_t stage_counter) {
 	Json::Value payload = SerializeVisibleEvent(event, -1, stage_counter);
-	payload.removeMember("revealed_hand_tiles");
-	if (event.kind == EventKind::kSelfDrawnWin) {
-		payload.removeMember("tile");
+	if (event.kind != EventKind::kDiscardWin &&
+		event.kind != EventKind::kRobAddedKongWin &&
+		event.kind != EventKind::kSelfDrawnWin) {
+		payload.removeMember("revealed_hand_tiles");
 	}
 	return payload;
 }
@@ -844,6 +845,7 @@ auto ActiveSession::build_event_message_for_player(
 	for (const auto& current : snapshot["seats"]) {
 		Json::Value seat_payload(Json::objectValue);
 		seat_payload["seat_index"] = current["seat_index"];
+		seat_payload["player_id"] = current["player_id"];
 		seat_payload["score"] = current["score"];
 		seat_payload["afk"] = current["afk"];
 		seat_payload["disconnected"] = current["disconnected"];

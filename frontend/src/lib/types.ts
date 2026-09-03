@@ -162,6 +162,7 @@ export interface GameEventSnapshot {
 
 export interface CompactSeatStatus {
   seat_index: number
+  player_id?: number | null
   score: number
   afk: boolean
   disconnected?: boolean

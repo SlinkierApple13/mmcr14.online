@@ -152,7 +152,7 @@ TEST(ActiveSessionTest, SpectatorSnapshotNeverContainsConcealedTilesOrActions) {
 	}
 }
 
-TEST(ActiveSessionTest, SpectatorEventsKeepPublicActionsAndHideWinningHandData) {
+TEST(ActiveSessionTest, SpectatorEventsKeepPublicActionsAndRevealWinningHands) {
 	SessionHarness harness;
 
 	Event discard;
@@ -178,8 +178,21 @@ TEST(ActiveSessionTest, SpectatorEventsKeepPublicActionsAndHideWinningHandData) 
 		harness.session.build_event_message_for_spectator(self_drawn_win, "transition");
 	const Json::Value& win_event = win_message["payload"]["event"];
 	EXPECT_EQ("self_drawn_win", win_event["kind"].asString());
-	EXPECT_FALSE(win_event.isMember("tile"));
-	EXPECT_FALSE(win_event.isMember("revealed_hand_tiles"));
+	EXPECT_EQ(0x22U, win_event["tile"].asUInt());
+	ASSERT_TRUE(win_event["revealed_hand_tiles"].isArray());
+	ASSERT_EQ(2U, win_event["revealed_hand_tiles"].size());
+	EXPECT_EQ(0x11U, win_event["revealed_hand_tiles"][0].asUInt());
+	EXPECT_EQ(0x12U, win_event["revealed_hand_tiles"][1].asUInt());
+
+	for (const EventKind kind : {EventKind::kDiscardWin, EventKind::kRobAddedKongWin}) {
+		Event claimed_win = self_drawn_win;
+		claimed_win.kind = kind;
+		const Json::Value claimed_message =
+			harness.session.build_event_message_for_spectator(claimed_win, "transition");
+		const Json::Value& claimed_event = claimed_message["payload"]["event"];
+		EXPECT_EQ(0x22U, claimed_event["tile"].asUInt());
+		EXPECT_EQ(2U, claimed_event["revealed_hand_tiles"].size());
+	}
 }
 
 TEST(ActiveSessionTest, ApprovedSpectatorHandPayloadContainsOnlyRequestedSeat) {
@@ -430,6 +443,9 @@ TEST(ActiveSessionTest, IncrementalEventMessageOmitsFullSnapshot) {
 	EXPECT_TRUE(message["payload"]["state"].isObject());
 	EXPECT_TRUE(message["payload"]["viewer"].isObject());
 	EXPECT_TRUE(message["payload"]["seat_status"].isArray());
+	for (const auto& seat : message["payload"]["seat_status"]) {
+		EXPECT_TRUE(seat.isMember("player_id"));
+	}
 }
 
 TEST(ActiveSessionTest, WinPayloadIncludesExplicitFanNames) {
