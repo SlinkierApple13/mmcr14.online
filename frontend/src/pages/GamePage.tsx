@@ -47,6 +47,7 @@ type SpectatorSeat = {
 type SpectatorHandRequest = {
   request_id: string
   seat_index: number
+  spectator_username: string
 }
 
 function resolveSessionId(routeId: string | undefined, search: string): number | null {
@@ -242,7 +243,9 @@ export default function GamePage() {
 
         if (env.type === 'spectator.hand.request' && !isSpectator) {
           const payload = env.payload as Partial<SpectatorHandRequest>
-          if (typeof payload.request_id === 'string' && typeof payload.seat_index === 'number') {
+          if (typeof payload.request_id === 'string' &&
+              typeof payload.seat_index === 'number' &&
+              typeof payload.spectator_username === 'string') {
             setSpectatorHandRequests((current) => (
               current.some((item) => item.request_id === payload.request_id)
                 ? current
@@ -581,21 +584,19 @@ export default function GamePage() {
     sendEnvelope(socket, 'spectator.perspective', { seat_index: seatIndex })
   }
 
-  function respondToSpectatorHand(request: SpectatorHandRequest, approved: boolean) {
+  function approveSpectatorHand(request: SpectatorHandRequest) {
     const socket = socketRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN) return
     sendEnvelope(socket, 'spectator.hand.respond', {
       request_id: request.request_id,
-      approved,
+      approved: true,
     })
     setSpectatorHandRequests((current) => (
       current.filter((item) => item.request_id !== request.request_id)
     ))
-    if (approved) {
-      setGrantedSpectatorSeats((current) => (
-        current.includes(request.seat_index) ? current : [...current, request.seat_index]
-      ))
-    }
+    setGrantedSpectatorSeats((current) => (
+      current.includes(request.seat_index) ? current : [...current, request.seat_index]
+    ))
   }
 
   function revokeSpectatorHands() {
@@ -716,33 +717,25 @@ export default function GamePage() {
   return (
     <div className="mahjongGame" style={{ background: sceneAppearance.backgroundColorOutside }}>
       {showNotif && <div className="game-notification">{notification}</div>}
-      {!isSpectator && spectatorHandRequests.length > 0 && (
-        <div className="spectator-hand-consent" role="dialog" aria-modal="true" aria-label="看牌申请">
-          <strong>看牌申请</strong>
-          <span>有观众申请查看你的手牌，是否同意？</span>
-          <div>
-            <button type="button" onClick={() => respondToSpectatorHand(spectatorHandRequests[0], false)}>
-              拒绝
-            </button>
-            <button type="button" className="is-primary" onClick={() => respondToSpectatorHand(spectatorHandRequests[0], true)}>
-              同意
-            </button>
-          </div>
-        </div>
-      )}
-      {!isSpectator && spectatorHandRequests.length === 0 && grantedSpectatorSeats.length > 0 && (
-        <div className="spectator-hand-consent" role="dialog" aria-modal="true" aria-label="看牌许可">
-          <strong>看牌许可</strong>
-          <span>有观众正在查看你的手牌，可随时取消许可。</span>
-          <div>
-            <button type="button" onClick={revokeSpectatorHands}>取消看牌许可</button>
-          </div>
-        </div>
-      )}
       {/* {phase === 'loading' && <div className="game-loading">连接牌桌中…</div>} */}
       <div className="game-page__layout" style={{ background: sceneAppearance.backgroundColorOutside }}>
         <section className="game-page__board-panel">
           <div className="game-page__stage-shell" style={{ background: sceneAppearance.backgroundColorTable }}>
+            {!isSpectator && spectatorHandRequests.length > 0 && (
+              <div className="spectator-hand-consent" role="dialog" aria-modal="true" aria-label="看牌申请">
+                <strong>看牌申请</strong>
+                <span>{spectatorHandRequests[0].spectator_username} 申请查看你的手牌</span>
+                <div>
+                  <button
+                    type="button"
+                    className="is-primary"
+                    onClick={() => approveSpectatorHand(spectatorHandRequests[0])}
+                  >
+                    同意
+                  </button>
+                </div>
+              </div>
+            )}
             <div ref={stageRef} className="game-stage" />
             {phase === 'loading' && (
               <div className="replay-stage-overlay">
@@ -802,6 +795,15 @@ export default function GamePage() {
             })}
           </div>
           <div className="game-page__sidebar-bottom-row">
+            {!isSpectator && grantedSpectatorSeats.length > 0 && (
+              <button
+                type="button"
+                className="scene-appearance-toggle__button"
+                onClick={revokeSpectatorHands}
+              >
+                取消看牌许可
+              </button>
+            )}
             {sidebarCards.length > 0 && (
               <button
                 type="button"

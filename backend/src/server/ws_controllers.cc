@@ -29,6 +29,7 @@ struct StatsWsSession {
 
 struct PendingSpectatorHandRequest {
 	std::weak_ptr<drogon::WebSocketConnection> spectator_connection;
+	std::string spectator_username;
 	std::int64_t session_id{0};
 	std::int64_t target_player_id{0};
 	int target_seat{-1};
@@ -1015,6 +1016,7 @@ private:
 		for (const auto& [request_id, hand_request] : pending_requests) {
 			Json::Value payload(Json::objectValue);
 			payload["request_id"] = request_id;
+			payload["spectator_username"] = hand_request.spectator_username;
 			payload["session_id"] = Json::Int64(hand_request.session_id);
 			payload["seat_index"] = hand_request.target_seat;
 			state_->SendWebSocketJson(
@@ -1153,6 +1155,7 @@ private:
 				hand_request_id,
 				PendingSpectatorHandRequest{
 					.spectator_connection = connection,
+					.spectator_username = context->player()->username,
 					.session_id = *session_id,
 					.target_player_id = target_player->player_id,
 					.target_seat = target_seat,
@@ -1162,6 +1165,7 @@ private:
 
 		Json::Value player_payload(Json::objectValue);
 		player_payload["request_id"] = hand_request_id;
+		player_payload["spectator_username"] = context->player()->username;
 		player_payload["session_id"] = Json::Int64(*session_id);
 		player_payload["seat_index"] = target_seat;
 		state_->send_to_player(

@@ -547,6 +547,11 @@ def main():
                         2.0,
                         "replayed player hand consent request",
                     )
+                    assert_true(
+                        player_hand_request.get("payload", {}).get("spectator_username")
+                        == f"ws_smoke_{os.getpid()}_4",
+                        f"spectator username missing from consent request: {player_hand_request}",
+                    )
                     hand_request_id = player_hand_request.get("payload", {}).get("request_id")
                     assert_true(isinstance(hand_request_id, str), f"missing hand request id: {player_hand_request}")
                     game_sockets[0].send_json(
