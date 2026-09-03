@@ -570,7 +570,7 @@ def main():
                         f"spectator username missing from consent request: {player_hand_request}",
                     )
                     assert_true(
-                        0 < player_hand_request.get("expires_in_ms", 0) <= 5000,
+                        0 < player_hand_request.get("expires_in_ms", 0) <= 10000,
                         f"invalid pending request expiry: {player_hand_request}",
                     )
                     hand_request_id = player_hand_request.get("request_id")
@@ -906,7 +906,7 @@ def main():
                     auto_denial, _ = denied_spectator_ws.expect_json(
                         lambda message: message.get("type") == "spectator.hand.result"
                         and message.get("payload", {}).get("approved") is False,
-                        7.0,
+                        13.0,
                         "server auto-denial result",
                     )
                     assert_true(

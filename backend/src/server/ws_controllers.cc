@@ -135,8 +135,8 @@ private:
 constexpr std::int64_t kSpectatorHandRequestCooldownMs = 3000;
 // Maximum number of unanswered hand requests one player may receive at a time.
 constexpr std::size_t kMaxOutstandingHandRequestsPerPlayer = 4;
-constexpr std::int64_t kSpectatorHandRequestVisibleMs = 5000;
-constexpr std::int64_t kSpectatorHandRequestServerTimeoutMs = 5500;
+constexpr std::int64_t kSpectatorHandRequestVisibleMs = 10000;
+constexpr std::int64_t kSpectatorHandRequestServerTimeoutMs = 10500;
 
 class StatsWebSocketController final
 	: public drogon::WebSocketController<StatsWebSocketController, false> {

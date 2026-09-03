@@ -126,6 +126,7 @@ export default function GamePage() {
   const spectatorPerspectiveSeatRef = useRef(0)
   const spectatorPerspectivePlayerIdRef = useRef<number | null>(null)
   const [spectatorManagement, setSpectatorManagement] = useState<SpectatorManagementEntry[]>([])
+  const spectatorManagementPendingIdsRef = useRef<Set<string>>(new Set())
 
   // ── Resolve session id from URL changes ───────────────────────
   useEffect(() => {
@@ -361,6 +362,17 @@ export default function GamePage() {
               }]
             })
             : []
+          const pendingRequestIds = new Set<string>(
+            entries.filter((entry) => entry.status === 'pending' && entry.request_id !== undefined)
+              .map((entry) => entry.request_id as string),
+          )
+          for (const entry of entries) {
+            if (entry.status === 'pending' && entry.request_id !== undefined &&
+                !spectatorManagementPendingIdsRef.current.has(entry.request_id)) {
+              notify(`${entry.spectator_username} 申请查看你的手牌`)
+            }
+          }
+          spectatorManagementPendingIdsRef.current = pendingRequestIds
           setSpectatorManagement(entries)
           return
         }
@@ -881,41 +893,46 @@ export default function GamePage() {
               )
             })}
           </div>
-          {!isSpectator && (
-            <div className="spectator-management-row">
+          <div className="game-page__sidebar-bottom-stack">
+            {!isSpectator && (
+              <div className="spectator-management-row">
+                <button
+                  type="button"
+                  className="scene-appearance-toggle__button"
+                  aria-expanded={spectatorManagementOpen}
+                  onClick={() => {
+                    if (appearancePanelOpen) setAppearancePanelOpen(false)
+                    setSpectatorManagementOpen((value) => !value)
+                  }}
+                >
+                  观战管理{spectatorManagement.length > 0 ? ` (${spectatorManagement.length})` : ''}
+                </button>
+              </div>
+            )}
+            <div className="game-page__sidebar-bottom-row">
+              {sidebarCards.length > 0 && (
+                <button
+                  type="button"
+                  className="scene-appearance-toggle__button"
+                  aria-expanded={ratingsExpanded}
+                  onClick={() => setRatingsExpanded((v) => !v)}
+                >
+                  {'玩家信息'}
+                </button>
+              )}
               <button
                 type="button"
                 className="scene-appearance-toggle__button"
-                aria-expanded={spectatorManagementOpen}
-                disabled={appearancePanelOpen}
-                onClick={() => setSpectatorManagementOpen((value) => !value)}
+                aria-expanded={appearancePanelOpen}
+                onClick={() => {
+                  if (spectatorManagementOpen) setSpectatorManagementOpen(false)
+                  setAppearancePanelOpen((value) => !value)
+                }}
               >
-                观战管理{spectatorManagement.length > 0 ? ` (${spectatorManagement.length})` : ''}
+                设置
               </button>
             </div>
-          )}
-          <div className="game-page__sidebar-bottom-row">
-            {sidebarCards.length > 0 && (
-              <button
-                type="button"
-                className="scene-appearance-toggle__button"
-                aria-expanded={ratingsExpanded}
-                onClick={() => setRatingsExpanded((v) => !v)}
-              >
-                {'玩家信息'}
-              </button>
-            )}
-            <button
-              type="button"
-              className="scene-appearance-toggle__button"
-              aria-expanded={appearancePanelOpen}
-              disabled={spectatorManagementOpen}
-              onClick={() => setAppearancePanelOpen((value) => !value)}
-            >
-              设置
-            </button>
-          </div>
-          {spectatorManagementOpen && (
+            {spectatorManagementOpen && (
             <div className="scene-appearance-toggle__panel spectator-management-panel">
               <div className="scene-appearance-toggle__card spectator-management-card">
                 <strong>观战管理</strong>
@@ -973,6 +990,7 @@ export default function GamePage() {
               </div>
             </div>
           )}
+          </div>
         </aside>
       </div>
     </div>

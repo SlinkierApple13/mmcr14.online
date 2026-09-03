@@ -92,22 +92,27 @@
 
 .spectator-management-row {
   display: flex;
-  padding-top: 4px;
 }
 
 .spectator-management-row .scene-appearance-toggle__button {
   width: 100%;
 }
 
-.game-page__sidebar-bottom-row {
+.game-page__sidebar-bottom-stack {
   display: flex;
+  flex-direction: column;
   gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
   position: sticky;
   bottom: 0;
   background: inherit;
-  padding-top: 4px;
   z-index: 20;
-  margin-top: auto;
+}
+
+.game-page__sidebar-bottom-row {
+  display: flex;
+  gap: 6px;
 }
 
 .game-page__sidebar-bottom-row .scene-appearance-toggle__button {
@@ -309,9 +314,15 @@
   right: 18px;
   bottom: 68px;
   width: 240px;
-  max-height: min(70dvh, 560px);
+  max-height: min(70dvh, 660px);
   overflow-y: auto;
   z-index: 200;
+}
+
+.game-page__sidebar-bottom-stack .scene-appearance-toggle__panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
 }
 
 .scene-appearance-toggle__card {
@@ -420,6 +431,15 @@
     bottom: 52px;
     width: min(300px, 92vw);
     max-height: min(55dvh, 440px);
+  }
+
+  .game-page__sidebar-bottom-stack .scene-appearance-toggle__panel {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    bottom: auto;
+    width: min(300px, 92vw);
+    max-height: calc(100dvh - 24px);
   }
 }
 
