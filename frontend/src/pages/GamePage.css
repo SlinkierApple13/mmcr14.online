@@ -20,9 +20,10 @@
   box-sizing: border-box;
   border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.97);
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(4px);
   color: #202526;
-  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 }
 
 .spectator-hand-consent > div {
@@ -114,6 +115,15 @@
 
 .game-page__ratings-area:not(.is-expanded) {
   display: none;
+}
+
+.spectator-revoke-row {
+  display: flex;
+  padding-top: 4px;
+}
+
+.spectator-revoke-row .scene-appearance-toggle__button {
+  width: 100%;
 }
 
 .game-page__sidebar-bottom-row {
@@ -444,9 +454,9 @@
 
 .game-notification {
   position: absolute;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 12px;
+  right: 12px;
+  max-width: min(360px, calc(100% - 24px));
   background: rgba(0, 0, 0, 0.75);
   color: #fff;
   padding: 12px 28px;

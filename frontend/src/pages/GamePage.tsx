@@ -48,6 +48,7 @@ type SpectatorHandRequest = {
   request_id: string
   seat_index: number
   spectator_username: string
+  expires_at_ms: number
 }
 
 function resolveSessionId(routeId: string | undefined, search: string): number | null {
@@ -248,10 +249,16 @@ export default function GamePage() {
           if (typeof payload.request_id === 'string' &&
               typeof payload.seat_index === 'number' &&
               typeof payload.spectator_username === 'string') {
+            const request: SpectatorHandRequest = {
+              request_id: payload.request_id,
+              seat_index: payload.seat_index,
+              spectator_username: payload.spectator_username,
+              expires_at_ms: Date.now() + 4000,
+            }
             setSpectatorHandRequests((current) => (
               current.some((item) => item.request_id === payload.request_id)
                 ? current
-                : [...current, payload as SpectatorHandRequest]
+                : [...current, request]
             ))
             notify('收到观众看牌申请')
           }
@@ -586,6 +593,24 @@ export default function GamePage() {
     }
   }, [sessionIdHint, token, sceneReady, isSpectator])
 
+  useEffect(() => {
+    if (isSpectator || spectatorHandRequests.length === 0) return
+    const request = spectatorHandRequests[0]
+    const timeout = window.setTimeout(() => {
+      const socket = socketRef.current
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        sendEnvelope(socket, 'spectator.hand.respond', {
+          request_id: request.request_id,
+          approved: false,
+        })
+      }
+      setSpectatorHandRequests((current) => (
+        current.filter((item) => item.request_id !== request.request_id)
+      ))
+    }, Math.max(0, request.expires_at_ms - Date.now()))
+    return () => window.clearTimeout(timeout)
+  }, [isSpectator, spectatorHandRequests])
+
   // ── Helpers ──────────────────────────────────────────────────
   function notify(msg: string) { setNotification(msg); setShowNotif(true); setTimeout(() => setShowNotif(false), 3000) }
 
@@ -736,7 +761,6 @@ export default function GamePage() {
   // ── Render ───────────────────────────────────────────────────
   return (
     <div className="mahjongGame" style={{ background: sceneAppearance.backgroundColorOutside }}>
-      {showNotif && <div className="game-notification">{notification}</div>}
       {/* {phase === 'loading' && <div className="game-loading">连接牌桌中…</div>} */}
       <div className="game-page__layout" style={{ background: sceneAppearance.backgroundColorOutside }}>
         <section className="game-page__board-panel">
@@ -757,6 +781,7 @@ export default function GamePage() {
               </div>
             )}
             <div ref={stageRef} className="game-stage" />
+            {showNotif && <div className="game-notification">{notification}</div>}
             {phase === 'loading' && (
               <div className="replay-stage-overlay">
                 {sceneReady ? '连接牌桌中…' : '正在加载中…'}
@@ -814,8 +839,8 @@ export default function GamePage() {
               )
             })}
           </div>
-          <div className="game-page__sidebar-bottom-row">
-            {!isSpectator && grantedSpectatorSeats.length > 0 && (
+          {!isSpectator && grantedSpectatorSeats.length > 0 && (
+            <div className="spectator-revoke-row">
               <button
                 type="button"
                 className="scene-appearance-toggle__button"
@@ -823,7 +848,9 @@ export default function GamePage() {
               >
                 取消看牌许可
               </button>
-            )}
+            </div>
+          )}
+          <div className="game-page__sidebar-bottom-row">
             {sidebarCards.length > 0 && (
               <button
                 type="button"

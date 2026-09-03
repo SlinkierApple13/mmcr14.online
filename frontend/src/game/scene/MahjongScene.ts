@@ -1510,7 +1510,9 @@ export class MahjongScene {
         }
         case 'self_drawn_win': {
           this.roundEnded = true
-          if (actorDir === 0 && tile !== undefined && this.hands[0].drawnTile) {
+          if (this.presentationMode === 'spectator' && Array.isArray(event.revealed_hand_tiles)) {
+            this.hands[actorDir].revealHand(event.revealed_hand_tiles as number[], tile ?? null)
+          } else if (actorDir === 0 && tile !== undefined && this.hands[0].drawnTile) {
             this.hands[0].drawnTile.updateTid(tile)
             this.hands[0].drawnTile.show()
             this.waitDisplay.reset()
@@ -1525,7 +1527,8 @@ export class MahjongScene {
         case 'discard_win':
         case 'rob_added_kong_win': {
           this.roundEnded = true
-          if (actorDir !== 0 && Array.isArray(event.revealed_hand_tiles)) {
+          if ((this.presentationMode === 'spectator' || actorDir !== 0) &&
+              Array.isArray(event.revealed_hand_tiles)) {
             this.hands[actorDir].revealHand(event.revealed_hand_tiles as number[])
           }
           if (actorDir === 0) {
@@ -1869,13 +1872,17 @@ export class MahjongScene {
     const tile = typeof event.tile === 'number' ? event.tile : null
 
     if (kind === 'self_drawn_win') {
-      if (actorDir === 0 && tile !== null && this.hands[0].drawnTile) {
+      if (this.presentationMode === 'spectator' && Array.isArray(event.revealed_hand_tiles)) {
+        this.hands[actorDir].revealHand(event.revealed_hand_tiles as number[], tile)
+      } else if (actorDir === 0 && tile !== null && this.hands[0].drawnTile) {
         this.hands[0].drawnTile.updateTid(tile)
         this.hands[0].drawnTile.show()
       } else if (actorDir !== 0 && Array.isArray(event.revealed_hand_tiles)) {
         this.hands[actorDir].revealHand(event.revealed_hand_tiles as number[], tile)
       }
-    } else if ((kind === 'discard_win' || kind === 'rob_added_kong_win') && actorDir !== 0 && Array.isArray(event.revealed_hand_tiles)) {
+    } else if ((kind === 'discard_win' || kind === 'rob_added_kong_win') &&
+        (this.presentationMode === 'spectator' || actorDir !== 0) &&
+        Array.isArray(event.revealed_hand_tiles)) {
       this.hands[actorDir].revealHand(event.revealed_hand_tiles as number[])
     }
 
