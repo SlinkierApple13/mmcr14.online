@@ -91,6 +91,8 @@ struct ActiveSessionSummary {
     bool debug_mode{false};
     bool ended{false};
     bool public_session{true};
+    std::string mode{"standard"};
+    std::string mode_name{"标准"};
     std::vector<std::string> names;
 };
 

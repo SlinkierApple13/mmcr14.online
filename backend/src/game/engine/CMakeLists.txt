@@ -30,6 +30,7 @@ endif()
 
 target_link_libraries(mmcr_game_engine
     PUBLIC
+        mmcr::game_mode
         mmcr::storage
         mmcr::util
         mmcr::warnings)

@@ -26,6 +26,9 @@ struct PendingSeat {
     int seat_index{-1};
     auth::PlayerProfilePtr player;
     bool ready{false};
+    // Team for team modes (过五关): 0 = 虎, 1 = 龙, -1 = unassigned.
+    // Bound by player_id; survives seat changes.
+    int team{-1};
 };
 
 struct PendingSessionSummary {
@@ -42,6 +45,8 @@ struct PendingSessionSummary {
     bool public_session{true};
     bool can_join{true};
     bool can_start{false};
+    std::string mode{"standard"};
+    std::string mode_name{"标准"};
     std::vector<std::string> names;
 };
 
@@ -76,11 +81,13 @@ public:
     [[nodiscard]] auto join_player(auth::PlayerProfilePtr player) -> util::Status;
     [[nodiscard]] auto player_leaves(std::int64_t player_id) -> util::Status;
     [[nodiscard]] auto player_ready(std::int64_t player_id, bool ready) -> util::Status;
+    [[nodiscard]] auto player_set_team(std::int64_t player_id, int team) -> util::Status;
     void ensure_empty_timer();
     void reset_empty_timer();
 
 private:
     [[nodiscard]] auto is_empty_locked() const -> bool;
+    [[nodiscard]] auto requires_teams() const -> bool;
     void send_message(std::int64_t player_id, const Json::Value& message);
 
     QueueConfig queue_config_;
