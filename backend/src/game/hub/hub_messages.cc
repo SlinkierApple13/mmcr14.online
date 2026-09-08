@@ -136,6 +136,7 @@ PendingSessionSummary BuildPendingSummary(const PendingSession& session) {
         .secondary_timer_ms = session.game_config().secondary_timer_ms,
         .auxiliary_timer_ms = session.game_config().auxiliary_timer_ms,
         .round_count = session.game_config().round_count,
+        .forced_end_floor = session.game_config().forced_end_floor,
         .recorded = session.game_config().recorded,
         .debug_mode = session.game_config().debug_mode,
         .public_session = session.game_config().public_session,
@@ -155,6 +156,9 @@ Json::Value SerializePendingSummary(const PendingSessionSummary& summary) {
     payload["secondary_timer_ms"] = summary.secondary_timer_ms;
     payload["auxiliary_timer_ms"] = summary.auxiliary_timer_ms;
     payload["round_count"] = summary.round_count;
+    payload["forced_end_floor"] = summary.forced_end_floor.has_value()
+        ? Json::Value(*summary.forced_end_floor)
+        : Json::Value(Json::nullValue);
     payload["recorded"] = summary.recorded;
     payload["debug_mode"] = summary.debug_mode;
     payload["public_session"] = summary.public_session;
@@ -185,6 +189,9 @@ Json::Value SerializeActiveSummaryList(const std::vector<ActiveSessionSummary>& 
         entry["secondary_timer_ms"] = session.secondary_timer_ms;
         entry["auxiliary_timer_ms"] = session.auxiliary_timer_ms;
         entry["round_count"] = session.round_count;
+        entry["forced_end_floor"] = session.forced_end_floor.has_value()
+            ? Json::Value(*session.forced_end_floor)
+            : Json::Value(Json::nullValue);
         entry["round_counter"] = Json::UInt64(session.round_counter);
         entry["recorded"] = session.recorded;
         entry["debug_mode"] = session.debug_mode;
@@ -273,6 +280,7 @@ ActiveSessionSummary BuildActiveSummary(const ActiveSession& session) {
     summary.secondary_timer_ms = session.config().secondary_timer_ms;
     summary.auxiliary_timer_ms = session.config().auxiliary_timer_ms;
     summary.round_count = session.config().round_count;
+    summary.forced_end_floor = session.config().forced_end_floor;
     summary.round_counter = session.state().round_counter;
     summary.recorded = session.config().recorded;
     summary.debug_mode = session.config().debug_mode;

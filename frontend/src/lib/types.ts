@@ -29,6 +29,7 @@ export interface PendingSessionSummary {
   secondary_timer_ms: number
   auxiliary_timer_ms: number
   round_count: number
+  forced_end_floor: number | null
   recorded: boolean
   debug_mode?: boolean
   public_session: boolean
@@ -43,6 +44,7 @@ export interface ActiveSessionSummary {
   secondary_timer_ms: number
   auxiliary_timer_ms: number
   round_count: number
+  forced_end_floor: number | null
   round_counter: number
   recorded: boolean
   debug_mode?: boolean

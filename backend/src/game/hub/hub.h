@@ -85,6 +85,7 @@ struct ActiveSessionSummary {
 	int secondary_timer_ms{4000};
 	int auxiliary_timer_ms{12000};
 	int round_count{16};
+	std::optional<int> forced_end_floor{std::nullopt};
 	std::uint64_t round_counter{0};
 	bool recorded{true};
 	bool debug_mode{false};

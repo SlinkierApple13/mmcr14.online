@@ -1136,6 +1136,13 @@ void ActiveSession::execute_transition() {
 	};
 
 	auto next_round_transition = [this]() {
+		if (config_.forced_end_floor.has_value()) {
+			for (int seat = 0; seat < 4; ++seat) {
+				if (seats_[seat].score < *config_.forced_end_floor) {
+					return Event{ .kind = EventKind::kEnd, .actor_seat = 0 };
+				}
+			}
+		}
 		const auto configured_round_count = static_cast<std::uint64_t>(std::max(config_.round_count, 0));
 		return Event{
 			.kind = (configured_round_count != 0 && state_.round_counter >= configured_round_count)

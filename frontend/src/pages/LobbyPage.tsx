@@ -13,6 +13,7 @@ import {
   Layout,
   Modal,
   Row,
+  Select,
   Space,
   Switch,
   Table,
@@ -68,6 +69,7 @@ interface CreateQueueValues {
   secondary_timer_seconds: number
   auxiliary_timer_seconds: number
   total_rounds: number
+  forced_end_floor: number | null
   recorded: boolean
   singleplayer: boolean
   debug_mode: boolean
@@ -200,6 +202,7 @@ function CreateQueueModal({
           secondary_timer_seconds: 4,
           auxiliary_timer_seconds: 12,
           total_rounds: 16,
+          forced_end_floor: null,
           recorded: true,
           singleplayer: false,
           debug_mode: false,
@@ -207,104 +210,144 @@ function CreateQueueModal({
           public_session: true,
         }}
       >
-        <Form.Item
-          label="首要时限 (秒)"
-          name="primary_timer_seconds"
-          rules={[
-            { required: true, message: '请输入首要时限!' },
-            {
-              validator: (_, value) =>
-                validateWholeSecondsInRange(
-                  value,
-                  PRIMARY_TIMER_SECONDS_MIN,
-                  PRIMARY_TIMER_SECONDS_MAX,
-                  '首要时限',
-                ),
-            },
-          ]}
-        >
-          <InputNumber min={PRIMARY_TIMER_SECONDS_MIN} max={PRIMARY_TIMER_SECONDS_MAX} step={1} precision={0} />
-        </Form.Item>
-        <Form.Item
-          label="次要时限 (秒)"
-          name="secondary_timer_seconds"
-          dependencies={['primary_timer_seconds']}
-          rules={[
-            { required: true, message: '请输入次要时限!' },
-            ({ getFieldValue }) => ({
-              validator: (_, value) => {
-                const primaryValue = getFieldValue('primary_timer_seconds')
-                if (typeof primaryValue !== 'number' || Number.isNaN(primaryValue) || !Number.isInteger(primaryValue)) {
-                  return Promise.reject(new Error('请先输入有效的首要时限'))
-                }
-                return validateWholeSecondsInRange(
-                  value,
-                  SECONDARY_TIMER_SECONDS_MIN,
-                  primaryValue,
-                  '次要时限',
-                )
-              },
-            }),
-          ]}
-        >
-          <InputNumber
-            min={SECONDARY_TIMER_SECONDS_MIN}
-            max={typeof primaryTimerSeconds === 'number' ? Math.max(primaryTimerSeconds, SECONDARY_TIMER_SECONDS_MIN) : PRIMARY_TIMER_SECONDS_MAX}
-            step={1}
-            precision={0}
-          />
-        </Form.Item>
-        <Form.Item
-          label="储备时限 (秒)"
-          name="auxiliary_timer_seconds"
-          rules={[
-            { required: true, message: '请输入储备时限!' },
-            {
-              validator: (_, value) =>
-                validateWholeSecondsInRange(
-                  value,
-                  AUXILIARY_TIMER_SECONDS_MIN,
-                  AUXILIARY_TIMER_SECONDS_MAX,
-                  '储备时限',
-                ),
-            },
-          ]}
-        >
-          <InputNumber min={AUXILIARY_TIMER_SECONDS_MIN} max={AUXILIARY_TIMER_SECONDS_MAX} step={1} precision={0} />
-        </Form.Item>
-        <Form.Item
-          label="总小局数"
-          name="total_rounds"
-          rules={[
-            { required: true, message: '请选择总小局数!' },
-            {
-              validator: (_, value) =>
-                validateWholeSecondsInRange(
-                  value,
-                  TOTAL_ROUNDS_MIN,
-                  TOTAL_ROUNDS_MAX,
-                  '总小局数',
-                ),
-            },
-          ]}
-        >
-          <InputNumber min={TOTAL_ROUNDS_MIN} max={TOTAL_ROUNDS_MAX} step={1} precision={0} />
-        </Form.Item>
-        <Form.Item label="等待时公开" name="public_session" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="保留记录" name="recorded" valuePropName="checked">
-          <Switch disabled={singleplayer || debugMode} />
-        </Form.Item>
-        <Form.Item label="休闲模式" name="unranked" valuePropName="checked">
-          <Switch disabled={singleplayer || debugMode || !recorded} />
-        </Form.Item>
-        <Form.Item label="单人游戏" name="singleplayer" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label="调试模式" name="debug_mode" valuePropName="checked">
-          <Switch />
-        </Form.Item>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item
+              label="首要时限 (秒)"
+              name="primary_timer_seconds"
+              rules={[
+                { required: true, message: '请输入首要时限!' },
+                {
+                  validator: (_, value) =>
+                    validateWholeSecondsInRange(
+                      value,
+                      PRIMARY_TIMER_SECONDS_MIN,
+                      PRIMARY_TIMER_SECONDS_MAX,
+                      '首要时限',
+                    ),
+                },
+              ]}
+            >
+              <InputNumber min={PRIMARY_TIMER_SECONDS_MIN} max={PRIMARY_TIMER_SECONDS_MAX} step={1} precision={0} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              label="次要时限 (秒)"
+              name="secondary_timer_seconds"
+              dependencies={['primary_timer_seconds']}
+              rules={[
+                { required: true, message: '请输入次要时限!' },
+                ({ getFieldValue }) => ({
+                  validator: (_, value) => {
+                    const primaryValue = getFieldValue('primary_timer_seconds')
+                    if (typeof primaryValue !== 'number' || Number.isNaN(primaryValue) || !Number.isInteger(primaryValue)) {
+                      return Promise.reject(new Error('请先输入有效的首要时限'))
+                    }
+                    return validateWholeSecondsInRange(
+                      value,
+                      SECONDARY_TIMER_SECONDS_MIN,
+                      primaryValue,
+                      '次要时限',
+                    )
+                  },
+                }),
+              ]}
+            >
+              <InputNumber
+                min={SECONDARY_TIMER_SECONDS_MIN}
+                max={typeof primaryTimerSeconds === 'number' ? Math.max(primaryTimerSeconds, SECONDARY_TIMER_SECONDS_MIN) : PRIMARY_TIMER_SECONDS_MAX}
+                step={1}
+                precision={0}
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item
+              label="储备时限 (秒)"
+              name="auxiliary_timer_seconds"
+              rules={[
+                { required: true, message: '请输入储备时限!' },
+                {
+                  validator: (_, value) =>
+                    validateWholeSecondsInRange(
+                      value,
+                      AUXILIARY_TIMER_SECONDS_MIN,
+                      AUXILIARY_TIMER_SECONDS_MAX,
+                      '储备时限',
+                    ),
+                },
+              ]}
+            >
+              <InputNumber min={AUXILIARY_TIMER_SECONDS_MIN} max={AUXILIARY_TIMER_SECONDS_MAX} step={1} precision={0} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item
+              label="总小局数"
+              name="total_rounds"
+              rules={[
+                { required: true, message: '请选择总小局数!' },
+                {
+                  validator: (_, value) =>
+                    validateWholeSecondsInRange(
+                      value,
+                      TOTAL_ROUNDS_MIN,
+                      TOTAL_ROUNDS_MAX,
+                      '总小局数',
+                    ),
+                },
+              ]}
+            >
+              <InputNumber min={TOTAL_ROUNDS_MIN} max={TOTAL_ROUNDS_MAX} step={1} precision={0} />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item label="击飞" name="forced_end_floor">
+              <Select
+                style={{ width: 90 }}
+                options={[
+                  { value: null, label: '无' },
+                  { value: -1500, label: '-1500 点' },
+                  { value: -2000, label: '-2000 点' },
+                ]}
+              />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item label="等待时公开" name="public_session" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item label="保留记录" name="recorded" valuePropName="checked">
+              <Switch disabled={singleplayer || debugMode} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item label="休闲模式" name="unranked" valuePropName="checked">
+              <Switch disabled={singleplayer || debugMode || !recorded} />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item label="单人游戏" name="singleplayer" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item label="调试模式" name="debug_mode" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+        </Row>
       </Form>
     </Modal>
   )
@@ -592,6 +635,7 @@ function LobbyPage() {
             secondary_timer_ms: values.secondary_timer_seconds * 1000,
             auxiliary_timer_ms: values.auxiliary_timer_seconds * 1000,
             round_count: values.total_rounds,
+            forced_end_floor: values.forced_end_floor ?? null,
             recorded: values.singleplayer || values.debug_mode ? false : values.recorded,
             debug_mode: values.debug_mode,
             unranked: values.unranked,
@@ -682,6 +726,12 @@ function LobbyPage() {
         formatTimerTriple(record.primary_timer_ms, record.secondary_timer_ms, record.auxiliary_timer_ms),
     },
     {
+      title: '击飞',
+      dataIndex: 'forced_end_floor',
+      key: 'forced_end_floor',
+      render: (value: number | null) => (value === null || value === undefined ? '无' : `${value} 点`),
+    },
+    {
       title: '保留记录',
       dataIndex: 'recorded',
       key: 'recorded',
@@ -734,6 +784,12 @@ function LobbyPage() {
       key: 'time_limits',
       render: (_, record) =>
         formatTimerTriple(record.primary_timer_ms, record.secondary_timer_ms, record.auxiliary_timer_ms),
+    },
+    {
+      title: '击飞',
+      dataIndex: 'forced_end_floor',
+      key: 'forced_end_floor',
+      render: (value: number | null) => (value === null || value === undefined ? '无' : `${value} 点`),
     },
     {
       title: '保留记录',

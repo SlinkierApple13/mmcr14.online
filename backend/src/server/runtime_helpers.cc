@@ -720,6 +720,9 @@ Json::Value SerializeActiveSummary(const game::ActiveSessionSummary& summary) {
 	payload["secondary_timer_ms"] = summary.secondary_timer_ms;
 	payload["auxiliary_timer_ms"] = summary.auxiliary_timer_ms;
 	payload["round_count"] = summary.round_count;
+	payload["forced_end_floor"] = summary.forced_end_floor.has_value()
+		? Json::Value(*summary.forced_end_floor)
+		: Json::Value(Json::nullValue);
 	payload["round_counter"] = Json::UInt64(summary.round_counter);
 	payload["recorded"] = summary.recorded;
 	payload["ended"] = summary.ended;
@@ -927,6 +930,18 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
 	}
 	config.seat_shuffle_period = seat_shuffle_period.value();
 
+	const Json::Value* forced_end_floor = FindField(object, {"forced_end_floor", "forcedEndFloor"});
+	if (forced_end_floor != nullptr && !forced_end_floor->isNull()) {
+		if (!forced_end_floor->isInt()) {
+			return util::Status::InvalidArgument("forced_end_floor must be null, -1500 or -2000");
+		}
+		const int floor_value = forced_end_floor->asInt();
+		if (floor_value != -1500 && floor_value != -2000) {
+			return util::Status::InvalidArgument("forced_end_floor must be null, -1500 or -2000");
+		}
+		config.forced_end_floor = floor_value;
+	}
+
 	auto bounds_status = ValidateGameConfigBounds(config);
 	if (!bounds_status.ok()) {
 		return bounds_status;
@@ -1002,6 +1017,7 @@ game::PendingSessionSummary BuildPendingSummary(const game::PendingSession& sess
 		.secondary_timer_ms = session.game_config().secondary_timer_ms,
 		.auxiliary_timer_ms = session.game_config().auxiliary_timer_ms,
 		.round_count = session.game_config().round_count,
+		.forced_end_floor = session.game_config().forced_end_floor,
 		.recorded = session.game_config().recorded,
 		.public_session = session.game_config().public_session,
 		.can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
@@ -1017,6 +1033,9 @@ Json::Value SerializePendingSummary(const game::PendingSessionSummary& summary) 
 	payload["occupied_seat_count"] = summary.occupied_seat_count;
 	payload["ready_seat_count"] = summary.ready_seat_count;
 	payload["round_count"] = summary.round_count;
+	payload["forced_end_floor"] = summary.forced_end_floor.has_value()
+		? Json::Value(*summary.forced_end_floor)
+		: Json::Value(Json::nullValue);
 	payload["primary_timer_ms"] = summary.primary_timer_ms;
 	payload["secondary_timer_ms"] = summary.secondary_timer_ms;
 	payload["auxiliary_timer_ms"] = summary.auxiliary_timer_ms;
