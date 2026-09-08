@@ -13,6 +13,10 @@ auto PendingSession::is_empty_locked() const -> bool {
     });
 }
 
+auto PendingSession::requires_teams() const -> bool {
+    return game_config_.mode == GameMode::kPassFiveGates;
+}
+
 PendingSession::PendingSession(GameHub* hub,
                                std::int64_t session_id,
                                GameConfig game_config,
@@ -126,11 +130,46 @@ auto PendingSession::player_ready(std::int64_t player_id, bool ready) -> util::S
             continue;
         }
 
+        if (ready && requires_teams() && seat.team < 0) {
+            return util::Status::InvalidArgument("please choose a team before readying up");
+        }
         seat.ready = ready;
         return util::Status::Ok();
     }
 
     return util::Status::NotFound("player is not in pending session");
+}
+
+auto PendingSession::player_set_team(std::int64_t player_id, int team) -> util::Status {
+    if (team != 0 && team != 1) {
+        return util::Status::InvalidArgument("team must be 0 (虎) or 1 (龙)");
+    }
+    if (!requires_teams()) {
+        return util::Status::InvalidArgument("teams are not supported in this mode");
+    }
+
+    std::unique_lock lock(mutex_);
+    auto seat_it = std::find_if(seats_.begin(), seats_.end(), [player_id](const PendingSeat& seat) {
+        return seat.player.matches(player_id);
+    });
+    if (seat_it == seats_.end()) {
+        return util::Status::NotFound("player is not in pending session");
+    }
+
+    // Team capacity: at most 2 per team. Switching teams releases the old
+    // slot (checked after counting, so a full target team rejects).
+    const int target_count = static_cast<int>(std::count_if(
+        seats_.begin(), seats_.end(), [team](const PendingSeat& seat) {
+            return seat.player.valid() && seat.team == team;
+        }));
+    if (seat_it->team != team && target_count >= 2) {
+        return util::Status::InvalidArgument("team is full");
+    }
+
+    seat_it->team = team;
+    // Changing teams resets readiness (the player must re-confirm).
+    seat_it->ready = false;
+    return util::Status::Ok();
 }
 
 void PendingSession::ensure_empty_timer() {

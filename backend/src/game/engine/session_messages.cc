@@ -799,6 +799,12 @@ auto ActiveSession::build_snapshot_for_player(
     }
     payload["ratings"] = std::move(ratings_array);
 
+    Json::Value mode_state(Json::objectValue);
+    if (mode_ != nullptr) {
+        mode_->SerializeState(mode_state);
+    }
+    payload["mode_state"] = std::move(mode_state);
+
     return payload;
 }
 
@@ -847,6 +853,21 @@ auto ActiveSession::build_event_message_for_player(
     }
     payload["state"] = snapshot["state"];
     payload["viewer"] = snapshot["viewer"];
+    // Carry the full mode state on every event so clients can refresh
+    // progress (e.g. completed targets) without waiting for a snapshot.
+    if (snapshot.isMember("mode_state")) {
+        payload["mode_state"] = snapshot["mode_state"];
+    }
+
+    // Attach the incremental mode update only on round-result events (a win
+    // or drawn game) so all players see the same target-completion flash.
+    Json::Value mode_update(Json::objectValue);
+    if (mode_ != nullptr && IsRoundResultTerminal(event.kind)) {
+        mode_->SerializeEvent(mode_update);
+    }
+    if (mode_update.isObject() && !mode_update.empty()) {
+        payload["mode_update"] = std::move(mode_update);
+    }
 
     Json::Value seat_status(Json::arrayValue);
     for (const auto& current : snapshot["seats"]) {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import SceneAppearancePanel from '../components/SceneAppearancePanel'
+import { ModePanel, TeamPanel } from '../components/ModePanel'
 import { MahjongScene } from '../game/scene/MahjongScene'
 import { buildWebSocketUrl, sendEnvelope } from '../lib/backend'
 import { useStoredSceneAppearance } from '../lib/useStoredSceneAppearance'
@@ -15,6 +16,7 @@ import {
   saveStoredVolume,
 } from '../lib/storage'
 import type {
+  FiveGatesModeUpdate,
   GameEventPayload,
   PendingSnapshot,
   PassAckPayload,
@@ -130,6 +132,10 @@ export default function GamePage() {
   const spectatorPredrawInProgressRef = useRef(false)
   const [spectatorManagement, setSpectatorManagement] = useState<SpectatorManagementEntry[]>([])
   const spectatorManagementPendingIdsRef = useRef<Set<string>>(new Set())
+  const [modeState, setModeState] = useState<Record<string, unknown> | null | undefined>(undefined)
+  const [modeUpdate, setModeUpdate] = useState<FiveGatesModeUpdate | null>(null)
+  const [modeEnded, setModeEnded] = useState(false)
+  const [activeSeats, setActiveSeats] = useState<Array<{ seat_index: number; player_id: number | null; username: string | null }>>([])
 
   // ── Resolve session id from URL changes ───────────────────────
   useEffect(() => {
@@ -430,6 +436,9 @@ export default function GamePage() {
             setPendingSnapshot(snap)
             setPhase('pending')
             lastScRef.current = -1
+            // Capture mode state (e.g. team requirement for 过五关)
+            const snapMode = (env.payload as Record<string, unknown>)?.mode_state
+            setModeState((snapMode as Record<string, unknown> | null | undefined) ?? null)
             // Capture ratings for pending phase sidebar
             const pRatings = (snap as unknown as Record<string, unknown>)?.ratings
             if (Array.isArray(pRatings)) {
@@ -448,6 +457,16 @@ export default function GamePage() {
               if (!isSpectator) saveStoredSessionId(sid)
               setSessionIdHint(sid)
             }
+            const snapMode = (env.payload as Record<string, unknown>)?.mode_state
+            setModeState((snapMode as Record<string, unknown> | null | undefined) ?? null)
+            // Keep seat identity (player_id -> username) for the mode panel.
+            setActiveSeats(
+              snap.seats.map((seat) => ({
+                seat_index: seat.seat_index,
+                player_id: seat.player_id,
+                username: seat.username,
+              })),
+            )
             sceneRef.current?.flushFromSnapshot(snap)
             if (isSpectator) {
               const seats = snap.seats.map((seat) => ({
@@ -483,6 +502,7 @@ export default function GamePage() {
             }
             if (snap.state.ended) {
               gameEndedRef.current = true
+              setModeEnded(true)
               scheduleLobbyReturn()
             }
           }
@@ -577,6 +597,14 @@ export default function GamePage() {
               }
             }
           }
+          // Capture mode updates (过五关 target completion / winner)
+          if (payload.mode_update) {
+            setModeUpdate(payload.mode_update)
+          }
+          const snapMode = (env.payload as Record<string, unknown>)?.mode_state
+          if (snapMode !== undefined) {
+            setModeState((snapMode as Record<string, unknown> | null | undefined) ?? null)
+          }
           // Capture ratings from start/end events
           const ratingsPayload = (env.payload as Record<string, unknown>)?.ratings
           if (Array.isArray(ratingsPayload)) {
@@ -606,6 +634,7 @@ export default function GamePage() {
           }
           if (isAuthoritativeEnd) {
             gameEndedRef.current = true
+            setModeEnded(true)
             scheduleLobbyReturn()
           }
           return
@@ -851,7 +880,49 @@ export default function GamePage() {
   function sendReady(ready: boolean) {
     const s = socketRef.current
     if (!s || s.readyState !== WebSocket.OPEN || !sessionIdHint) return
+    // 过五关: must pick a team before readying up.
+    if (ready && requiresTeams()) {
+      const myTeam = myTeamId()
+      if (myTeam === null) {
+        notify('请先选择队伍')
+        return
+      }
+    }
     sendEnvelope(s, 'queue.ready', { session_id: sessionIdHint, ready })
+  }
+
+  function sendTeam(team: 0 | 1) {
+    const s = socketRef.current
+    if (!s || s.readyState !== WebSocket.OPEN || !sessionIdHint) return
+    sendEnvelope(s, 'queue.team', { session_id: sessionIdHint, team })
+  }
+
+  function requiresTeams(): boolean {
+    // Pending phase: summary carries mode. Active phase: mode_state.mode.
+    if (phase === 'pending' && pendingSnapshot) {
+      return pendingSnapshot.summary.mode === 'pass_five_gates'
+    }
+    return (
+      modeState !== undefined &&
+      modeState !== null &&
+      (modeState as { mode?: string }).mode === 'pass_five_gates'
+    )
+  }
+
+  function myTeamId(): 0 | 1 | null {
+    if (!requiresTeams() || auth === null) return null
+    // Pending phase: seat snapshots carry the chosen team directly.
+    if (phase === 'pending' && pendingSnapshot) {
+      const own = pendingSnapshot.seats.find(
+        (s) => s.player_id === auth?.player?.player_id,
+      )
+      const team = own?.team
+      return team === 0 || team === 1 ? team : null
+    }
+    const teams = (modeState as { teams?: Array<{ player_id: number; team: 0 | 1 }> }).teams
+    if (!Array.isArray(teams)) return null
+    const entry = teams.find((t) => t.player_id === auth?.player?.player_id)
+    return entry?.team ?? null
   }
 
   // ── Pending phase: show waiting room in scene ────────────────
@@ -909,6 +980,25 @@ export default function GamePage() {
             {phase === 'loading' && (
               <div className="replay-stage-overlay">
                 {sceneReady ? '连接牌桌中…' : '正在加载中…'}
+              </div>
+            )}
+            {phase === 'pending' && pendingSnapshot && requiresTeams() && (
+              <div className="mode-overlay">
+                <TeamPanel
+                  seats={pendingSnapshot.seats}
+                  myPlayerId={auth?.player.player_id ?? null}
+                  onSelectTeam={sendTeam}
+                />
+              </div>
+            )}
+            {phase === 'active' && modeState !== undefined && modeState !== null && (
+              <div className="mode-overlay mode-overlay--top">
+                <ModePanel
+                  modeState={modeState}
+                  modeUpdate={modeUpdate}
+                  ended={modeEnded || typeof (modeState as { winner_team?: number | null }).winner_team === 'number'}
+                  seats={activeSeats}
+                />
               </div>
             )}
           </div>

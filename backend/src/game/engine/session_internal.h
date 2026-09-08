@@ -64,6 +64,7 @@ void AdvanceStoredRoundTurn(int next_actor, int* current_actor, std::int64_t* tu
     const Event& event,
     std::optional<std::int64_t> round_total_turn = std::nullopt);
 [[nodiscard]] WinData BuildWinData(const mahjong::hand& h);
+[[nodiscard]] std::vector<int> RawFanIndices(const mahjong::hand& h);
 
 // ---------------------------------------------------------------------------
 // Display / viewer serialization

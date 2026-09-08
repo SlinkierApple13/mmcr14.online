@@ -12,6 +12,7 @@
 #include "storage/game_record.h"
 #include "external/qingque/rules/qingque.h"
 #include "external/qingque/rules/w_data.h"
+#include "game/mode/mode_config.h"
 
 namespace mmcr::game {
 
@@ -63,6 +64,8 @@ Json::Value SerializeRecordGameConfig(const GameConfig& config) {
     payload["recorded"] = config.recorded;
     payload["debug_mode"] = config.debug_mode;
     payload["public_session"] = config.public_session;
+    payload["mode"] = std::string(GameModeName(config.mode));
+    payload["mode_config"] = SerializeModeConfigJson(config);
     return payload;
 }
 
@@ -282,7 +285,28 @@ Json::Value SerializeRecordEvent(const Event& event,
         }
         payload["final_scores"] = std::move(final_scores);
     }
+    if (!event.mode_result.isNull() && !event.mode_result.empty()) {
+        payload["mode_result"] = event.mode_result;
+    }
     return payload;
+}
+
+// Union of fan indices across every winning decomposition of h ("以原始的
+// 为准", not the highest-fan split). Used by mode controllers for completion
+// checking: a target counts as completed if any decomposition contains it.
+std::vector<int> RawFanIndices(const mahjong::hand& h) {
+    auto fan_codes = qingque::evaluate_fans(h);
+    std::vector<int> indices;
+    std::vector<bool> seen(qingque::fans.size(), false);
+    for (const auto& fan_code : fan_codes) {
+        for (std::size_t index = 0; index < qingque::fans.size(); ++index) {
+            if (fan_code.test(index) && !seen[index]) {
+                seen[index] = true;
+                indices.push_back(static_cast<int>(index));
+            }
+        }
+    }
+    return indices;
 }
 
 WinData BuildWinData(const mahjong::hand& h) {

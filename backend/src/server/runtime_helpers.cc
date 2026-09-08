@@ -19,6 +19,7 @@
 
 #include "external/qingque/rules/qingque.h"
 #include "external/qingque/rules/w_data.h"
+#include "game/mode/mode_config.h"
 
 namespace mmcr::server {
 
@@ -226,7 +227,11 @@ std::string DebugTrafficLogger::TodayUtcDate() {
     const auto now = std::chrono::system_clock::now();
     const auto time_t_now = std::chrono::system_clock::to_time_t(now);
     std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &time_t_now);
+#else
     gmtime_r(&time_t_now, &utc);
+#endif
     std::ostringstream oss;
     oss << std::put_time(&utc, "%Y-%m-%d");
     return oss.str();
@@ -727,6 +732,8 @@ Json::Value SerializeActiveSummary(const game::ActiveSessionSummary& summary) {
     payload["recorded"] = summary.recorded;
     payload["ended"] = summary.ended;
     payload["public_session"] = summary.public_session;
+    payload["mode"] = summary.mode;
+    payload["mode_name"] = summary.mode_name;
     Json::Value names(Json::arrayValue);
     for (const auto& name : summary.names) {
         names.append(name);
@@ -826,7 +833,9 @@ util::Status ValidateGameConfigBounds(const game::GameConfig& config) {
         return util::Status::InvalidArgument("auxiliary_timer_ms must be between 0 and 45000");
     }
 
-    if (config.round_count < game::GameConfig::round_count_min ||
+    if (config.round_count == 0 && config.mode == game::GameMode::kPassFiveGates) {
+        // 过五关 allows unlimited rounds (0 = infinite).
+    } else if (config.round_count < game::GameConfig::round_count_min ||
         config.round_count > game::GameConfig::round_count_max) {
         return util::Status::InvalidArgument("round_count must be between 1 and 32");
     }
@@ -840,6 +849,19 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
     }
 
     game::GameConfig config;
+
+    // mode (optional; defaults to standard)
+    const Json::Value* mode_value = FindField(object, {"mode"});
+    if (mode_value != nullptr && !mode_value->isNull()) {
+        if (!mode_value->isString()) {
+            return util::Status::InvalidArgument("mode must be a string");
+        }
+        const auto parsed_mode = game::ParseGameMode(mode_value->asString());
+        if (!parsed_mode.has_value()) {
+            return util::Status::InvalidArgument("unknown mode: " + mode_value->asString());
+        }
+        config.mode = *parsed_mode;
+    }
 
     auto primary_timer_ms = ReadOptionalInt(
         object, {"primary_timer_ms", "primaryTimerMs"}, "primary_timer_ms", config.primary_timer_ms);
@@ -912,6 +934,15 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
     if (!config.recorded) {
         config.unranked = true;
     }
+    // Village rules (any non-standard mode) are only allowed in unranked rooms.
+    if (config.mode != game::GameMode::kStandard) {
+        if (!config.unranked) {
+            return util::Status::InvalidArgument(
+                "mode " + std::string(game::GameModeName(config.mode)) +
+                " is only allowed in unranked rooms");
+        }
+        config.unranked = true;
+    }
 
     auto public_session = ReadOptionalBool(
         object,
@@ -940,6 +971,28 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
             return util::Status::InvalidArgument("forced_end_floor must be null, -1500 or -2000");
         }
         config.forced_end_floor = floor_value;
+    }
+
+    // mode_config (optional; parsed at the HTTP boundary into a strongly
+    // typed per-mode struct; game code never touches the raw JSON).
+    const Json::Value* mode_config_value = FindField(object, {"mode_config", "modeConfig"});
+    if (mode_config_value == nullptr || mode_config_value->isNull()) {
+        mode_config_value = nullptr;
+    }
+    if (config.mode == game::GameMode::kStandard) {
+        if (mode_config_value != nullptr && !mode_config_value->empty()) {
+            return util::Status::InvalidArgument("mode_config is not supported for standard mode");
+        }
+    } else if (config.mode == game::GameMode::kPassFiveGates) {
+        Json::Value raw(Json::objectValue);
+        if (mode_config_value != nullptr) {
+            raw = *mode_config_value;
+        }
+        auto parsed = game::ParsePassFiveGatesConfig(raw);
+        if (!parsed.ok()) {
+            return parsed.status();
+        }
+        config.pass_five_gates = parsed.value();
     }
 
     auto bounds_status = ValidateGameConfigBounds(config);
@@ -1023,6 +1076,8 @@ game::PendingSessionSummary BuildPendingSummary(const game::PendingSession& sess
         .can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
         .can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
                      ready_seat_count == static_cast<int>(session.seats().size()),
+        .mode = std::string(game::GameModeName(session.game_config().mode)),
+        .mode_name = std::string(game::ModeDisplayName(session.game_config().mode)),
         .names = std::move(names),
     };
 }
@@ -1043,6 +1098,8 @@ Json::Value SerializePendingSummary(const game::PendingSessionSummary& summary) 
     payload["public_session"] = summary.public_session;
     payload["can_join"] = summary.can_join;
     payload["can_start"] = summary.can_start;
+    payload["mode"] = summary.mode;
+    payload["mode_name"] = summary.mode_name;
     Json::Value names(Json::arrayValue);
     for (const auto& name : summary.names) {
         names.append(name);

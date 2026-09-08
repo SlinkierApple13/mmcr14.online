@@ -541,3 +541,256 @@
 .game-leave-button:hover {
   background: rgba(232, 232, 224, 0.95);
 }
+
+
+/* ---- Play mode overlays (Five Gates) ---- */
+
+.mode-overlay {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  pointer-events: none;
+  width: min(720px, 92%);
+}
+
+.mode-overlay--top {
+  top: 10px;
+}
+
+.mode-team-panel,
+.mode-panel {
+  pointer-events: auto;
+  background: rgba(250, 248, 240, 0.94);
+  border: 2px solid #8a8a7a;
+  border-radius: 12px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  padding: 14px 18px;
+}
+
+.mode-overlay--top .mode-panel {
+  padding: 10px 16px;
+}
+
+/* Team selection (waiting room) */
+
+.mode-team-panel__title {
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 12px;
+  letter-spacing: 2px;
+}
+
+.mode-team-panel__teams {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.mode-team-panel__card {
+  flex: 1;
+  max-width: 300px;
+  border: 2px solid #ddd;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.mode-team-panel__card.is-mine {
+  box-shadow: 0 0 0 2px rgba(80, 120, 200, 0.5);
+}
+
+.mode-team-panel__team-name {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.mode-team-panel__count {
+  font-weight: 400;
+  font-size: 13px;
+  color: #777;
+}
+
+.mode-team-panel__members {
+  min-height: 42px;
+  margin-bottom: 8px;
+}
+
+.mode-team-panel__member {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.mode-team-panel__me {
+  color: #888;
+  font-size: 12px;
+}
+
+.mode-team-panel__ready-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #27ae60;
+  margin-left: 6px;
+}
+
+.mode-team-panel__empty {
+  color: #aaa;
+  font-size: 13px;
+}
+
+.mode-team-panel__join {
+  display: block;
+  width: 100%;
+  padding: 6px 0;
+  border: 1px solid #999;
+  border-radius: 6px;
+  background: #f0efe6;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.mode-team-panel__join:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mode-team-panel__joined {
+  text-align: center;
+  font-size: 14px;
+  color: #2c7a2c;
+  padding: 6px 0;
+  border: 1px dashed #2c7a2c;
+  border-radius: 6px;
+}
+
+.mode-team-panel__hint {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 14px;
+  color: #b03a2e;
+}
+
+/* In-game HUD */
+
+.mode-panel__teams {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.mode-panel__team {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 15px;
+}
+
+.mode-panel__team-name {
+  font-weight: 700;
+}
+
+.mode-panel__team-progress {
+  font-variant-numeric: tabular-nums;
+}
+
+.mode-panel__team-members {
+  font-size: 11px;
+  color: #888;
+}
+
+.mode-panel__winner-badge {
+  font-size: 13px;
+  color: #8a6d00;
+}
+
+.mode-panel__targets {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  flex: 1;
+}
+
+.mode-panel__targets-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.mode-panel__targets-row:last-child {
+  margin-bottom: 0;
+}
+
+.mode-panel__row-label {
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  width: 34px;
+  text-align: right;
+}
+
+.mode-panel__target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid #bbb;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  background: #fff;
+  transition: background 0.25s, border-color 0.25s, transform 0.25s;
+}
+
+.mode-panel__target-index {
+  font-size: 11px;
+  color: #999;
+}
+
+.mode-panel__target-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-panel__target-check {
+  color: #1e7e1e;
+  font-weight: 700;
+}
+
+.mode-panel__target.is-done {
+  background: #f0f7ee;
+  border-color: #6fae5f;
+}
+
+.mode-panel__target.is-just-done {
+  animation: mode-target-flash 0.9s ease;
+}
+
+.mode-panel.is-flash {
+  animation: mode-panel-flash 0.9s ease;
+}
+
+@keyframes mode-target-flash {
+  0% { transform: scale(1); background: #fff7cc; }
+  45% { transform: scale(1.12); background: #ffe680; }
+  100% { transform: scale(1); }
+}
+
+@keyframes mode-panel-flash {
+  0% { box-shadow: 0 0 0 0 rgba(255, 200, 60, 0.8); }
+  100% { box-shadow: 0 0 24px 10px rgba(255, 200, 60, 0); }
+}
+
+.mode-panel__result {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: #7a5c00;
+}
