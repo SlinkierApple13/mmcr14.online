@@ -140,6 +140,7 @@ PendingSessionSummary BuildPendingSummary(const PendingSession& session) {
         .recorded = session.game_config().recorded,
         .debug_mode = session.game_config().debug_mode,
         .public_session = session.game_config().public_session,
+        .abandon_game = session.game_config().abandon_game,
         .can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
         .can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
                      ready_seat_count == static_cast<int>(session.seats().size()),
@@ -162,6 +163,7 @@ Json::Value SerializePendingSummary(const PendingSessionSummary& summary) {
     payload["recorded"] = summary.recorded;
     payload["debug_mode"] = summary.debug_mode;
     payload["public_session"] = summary.public_session;
+    payload["abandon_game"] = summary.abandon_game;
     payload["can_join"] = summary.can_join;
     payload["can_start"] = summary.can_start;
     Json::Value names(Json::arrayValue);
@@ -197,6 +199,7 @@ Json::Value SerializeActiveSummaryList(const std::vector<ActiveSessionSummary>& 
         entry["debug_mode"] = session.debug_mode;
         entry["ended"] = session.ended;
         entry["public_session"] = session.public_session;
+        entry["abandon_game"] = session.abandon_game;
         Json::Value names(Json::arrayValue);
         for (const auto& name : session.names) {
             names.append(name);
@@ -286,6 +289,7 @@ ActiveSessionSummary BuildActiveSummary(const ActiveSession& session) {
     summary.debug_mode = session.config().debug_mode;
     summary.ended = session.ended();
     summary.public_session = session.public_session();
+    summary.abandon_game = session.config().abandon_game;
     for (const auto& seat : session.seats()) {
         const auto player = seat.player.lock();
         if (player != nullptr) {

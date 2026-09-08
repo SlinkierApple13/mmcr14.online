@@ -33,6 +33,7 @@ export interface PendingSessionSummary {
   recorded: boolean
   debug_mode?: boolean
   public_session: boolean
+  abandon_game: boolean
   can_join: boolean
   can_start: boolean
   names: string[]
@@ -50,6 +51,7 @@ export interface ActiveSessionSummary {
   debug_mode?: boolean
   ended?: boolean
   public_session: boolean
+  abandon_game: boolean
   names: string[]
 }
 
@@ -91,6 +93,7 @@ export interface SeatSnapshot {
   score: number
   afk: boolean
   disconnected?: boolean
+  abandoned?: boolean
   hand_tile_count: number
   has_drawn_tile: boolean
   player_id: number | null
@@ -133,6 +136,7 @@ export interface ActiveSessionSnapshot {
   result_event?: GameEventSnapshot | null
   spectator?: boolean
   reveal_all_hands?: boolean
+  abandon_game?: boolean
   hand_access?: {
     granted: boolean
     target_player_id?: number

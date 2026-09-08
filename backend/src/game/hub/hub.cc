@@ -484,6 +484,27 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
         return route_active_message(request, *session_it->second);
     }
 
+    if (*message_type == "game.abandon") {
+        const Json::Value* payload = FindPayload(request.message);
+        if (payload == nullptr) {
+            return util::Status::InvalidArgument("payload must be a JSON object");
+        }
+        auto abandon = ReadRequiredBool(*payload, "abandon");
+        if (!abandon.ok()) {
+            return abandon.status();
+        }
+        std::shared_lock lock(mutex_);
+        auto active_it = player_active_sessions_.find(player_id);
+        if (active_it == player_active_sessions_.end()) {
+            return util::Status::NotFound("player is not in an active session");
+        }
+        auto session_it = active_sessions_.find(active_it->second);
+        if (session_it == active_sessions_.end()) {
+            return util::Status::NotFound("active session not found");
+        }
+        return session_it->second->set_abandoned(player_id, abandon.value());
+    }
+
     if (*message_type == "resume.ack") {
         std::shared_lock lock(mutex_);
         auto active_it = player_active_sessions_.find(player_id);

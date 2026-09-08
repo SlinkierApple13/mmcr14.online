@@ -623,6 +623,7 @@ auto ActiveSession::build_snapshot_for_player(
     payload["phase"] = "active";
     payload["session_id"] = Json::Int64(identity_.id);
     payload["spectator"] = spectator;
+    payload["abandon_game"] = config_.abandon_game;
 
     Json::Value state_payload(Json::objectValue);
     state_payload["round_counter"] = Json::UInt64(state_.round_counter);
@@ -668,6 +669,7 @@ auto ActiveSession::build_snapshot_for_player(
         seat_payload["score"] = current.score;
         seat_payload["afk"] = current.is_afk();
         seat_payload["disconnected"] = current.disconnected;
+        seat_payload["abandoned"] = current.abandoned;
         seat_payload["hand_tile_count"] = Json::UInt64(current.hand_tiles.size());
         seat_payload["has_drawn_tile"] = current.has_drawn_tile();
 

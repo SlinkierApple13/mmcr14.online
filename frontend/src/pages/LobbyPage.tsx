@@ -71,6 +71,7 @@ interface CreateQueueValues {
   total_rounds: number
   forced_end_floor: number | null
   recorded: boolean
+  abandon_game: boolean
   singleplayer: boolean
   debug_mode: boolean
   unranked: boolean
@@ -105,6 +106,15 @@ function describeError(error: unknown, fallback: string): string {
 
 function formatTimerTriple(primaryTimerMs: number, secondaryTimerMs: number, auxiliaryTimerMs: number): string {
   return `${Math.floor(primaryTimerMs / 1000)}/${Math.floor(secondaryTimerMs / 1000)}+${Math.floor(auxiliaryTimerMs / 1000)}`
+}
+
+function formatEarlyEnd(forcedEndFloor: number | null, abandonGame: boolean): string {
+  const parts: string[] = []
+  if (abandonGame) parts.push('主动放弃')
+  if (forcedEndFloor !== null && forcedEndFloor !== undefined) {
+    parts.push(`${forcedEndFloor} 点击飞`)
+  }
+  return parts.length > 0 ? parts.join(' / ') : '无'
 }
 
 function formatRoundReadable(roundCounter: number): string {
@@ -204,6 +214,7 @@ function CreateQueueModal({
           total_rounds: 16,
           forced_end_floor: null,
           recorded: true,
+          abandon_game: true,
           singleplayer: false,
           debug_mode: false,
           unranked: false,
@@ -318,6 +329,13 @@ function CreateQueueModal({
               />
             </Form.Item>
           </Col>
+          <Col span={12}>
+            <Form.Item label="中途放弃" name="abandon_game" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Row gutter={16}>
           <Col span={12}>
             <Form.Item label="等待时公开" name="public_session" valuePropName="checked">
               <Switch />
@@ -637,6 +655,7 @@ function LobbyPage() {
             round_count: values.total_rounds,
             forced_end_floor: values.forced_end_floor ?? null,
             recorded: values.singleplayer || values.debug_mode ? false : values.recorded,
+            abandon_game: values.abandon_game,
             debug_mode: values.debug_mode,
             unranked: values.unranked,
             public_session: values.public_session,
@@ -726,10 +745,9 @@ function LobbyPage() {
         formatTimerTriple(record.primary_timer_ms, record.secondary_timer_ms, record.auxiliary_timer_ms),
     },
     {
-      title: '击飞',
-      dataIndex: 'forced_end_floor',
-      key: 'forced_end_floor',
-      render: (value: number | null) => (value === null || value === undefined ? '无' : `${value} 点`),
+      title: '中途结束',
+      key: 'early_end',
+      render: (_, record) => formatEarlyEnd(record.forced_end_floor, record.abandon_game),
     },
     {
       title: '保留记录',
@@ -786,10 +804,9 @@ function LobbyPage() {
         formatTimerTriple(record.primary_timer_ms, record.secondary_timer_ms, record.auxiliary_timer_ms),
     },
     {
-      title: '击飞',
-      dataIndex: 'forced_end_floor',
-      key: 'forced_end_floor',
-      render: (value: number | null) => (value === null || value === undefined ? '无' : `${value} 点`),
+      title: '中途结束',
+      key: 'early_end',
+      render: (_, record) => formatEarlyEnd(record.forced_end_floor, record.abandon_game),
     },
     {
       title: '保留记录',

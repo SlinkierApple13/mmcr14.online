@@ -247,6 +247,48 @@ util::Status ActiveSession::player_resumes(std::int64_t player_id) {
     return handle_event(event);
 }
 
+util::Status ActiveSession::set_abandoned(std::int64_t player_id, bool abandon) {
+    std::lock_guard lock(state_.mutex);
+    if (!config_.abandon_game) {
+        return util::Status::InvalidArgument("abandon_game is disabled for this session");
+    }
+    const auto seat_index = find_seat_index(player_id);
+    if (!seat_index.has_value()) {
+        return util::Status::NotFound("player is not in the active session");
+    }
+    Seat& seat_state = seats_[*seat_index];
+    if (!seat_state.player.valid()) {
+        return util::Status::InvalidArgument("invalid players cannot abandon");
+    }
+    if (seat_state.abandoned == abandon) {
+        return util::Status::Ok();
+    }
+    seat_state.abandoned = abandon;
+    if (!abandon) {
+        seat_state.afk_since_ms = 0;
+    }
+    broadcast_abandon_notify(*seat_index, abandon);
+    return util::Status::Ok();
+}
+
+void ActiveSession::broadcast_abandon_notify(int seat, bool abandoned) {
+    const auto player = seats_[seat].player.lock();
+    if (player == nullptr) {
+        return;
+    }
+    Json::Value payload(Json::objectValue);
+    payload["player_id"] = Json::Int64(player->player_id);
+    payload["username"] = player->username;
+    payload["abandoned"] = abandoned;
+    const Json::Value message = BuildEnvelope("game.abandon.notify", std::move(payload));
+    for (int target_seat = 0; target_seat < 4; ++target_seat) {
+        (void)send_message(target_seat, message);
+    }
+    if (hub_ != nullptr) {
+        hub_->send_to_spectators(identity_.id, message);
+    }
+}
+
 util::StatusOr<Json::Value> ActiveSession::build_snapshot_for_player_id(std::int64_t player_id) const {
     std::lock_guard lock(state_.mutex);
     const auto seat_index = find_seat_index(player_id);
@@ -812,6 +854,7 @@ util::Status ActiveSession::handle_event(const Event& event) {
         const bool was_disconnected = seats_[event.actor_seat].disconnected;
         seats_[event.actor_seat].afk_counter = 0;
         seats_[event.actor_seat].disconnected = false;
+        seats_[event.actor_seat].afk_since_ms = 0;
         if ((was_afk || was_disconnected) && !seats_[event.actor_seat].is_afk()) {
             afk_status_broadcast = EventKind::kPlayerResumed;
         }
@@ -923,6 +966,7 @@ util::Status ActiveSession::handle_event(const Event& event) {
 
         case EventKind::kPlayerLeft: {
             seats_[event.actor_seat].leave();
+            seats_[event.actor_seat].afk_since_ms = event.timestamp_ms;
             broadcast_claim(event);
         } break;
 
@@ -1166,6 +1210,7 @@ void ActiveSession::execute_transition() {
     if (transition.forced.value_or(false)) {
         ++seats_[transition.actor_seat].afk_counter;
         if (!was_afk && seats_[transition.actor_seat].is_afk()) {
+            seats_[transition.actor_seat].afk_since_ms = transition.timestamp_ms;
             Event event{
                 .kind = EventKind::kPlayerLeft,
                 .actor_seat = transition.actor_seat,
@@ -1174,6 +1219,51 @@ void ActiveSession::execute_transition() {
             };
             event_queue_.push_back(event);
             broadcast_claim(event);
+        }
+    }
+
+    // Abandon checks run at the exact moment a new round would start, not at
+    // round settlement: a player who abandons (or afks for the timeout)
+    // during the between-round pause ends the session here.
+    if (transition.kind == EventKind::kStart && config_.abandon_game) {
+        const auto now = now_ms();
+        int abandon_seat = -1;
+        bool newly_abandoned = false;
+        for (int seat = 0; seat < 4; ++seat) {
+            Seat& seat_state = seats_[seat];
+            if (seat_state.abandoned) {
+                abandon_seat = seat;
+                break;
+            }
+            if (!seat_state.player.valid()) {
+                continue;
+            }
+            const bool afk = seat_state.is_afk() || seat_state.disconnected;
+            if (!afk) {
+                seat_state.afk_since_ms = 0;
+                continue;
+            }
+            if (seat_state.afk_since_ms == 0) {
+                seat_state.afk_since_ms = now;
+                continue;
+            }
+            if (now - seat_state.afk_since_ms >= GameConfig::abandon_afk_timeout_ms) {
+                seat_state.abandoned = true;
+                abandon_seat = seat;
+                newly_abandoned = true;
+                break;
+            }
+        }
+        if (abandon_seat >= 0) {
+            if (newly_abandoned) {
+                broadcast_abandon_notify(abandon_seat, true);
+            }
+            transition = Event{
+                .kind = EventKind::kEnd,
+                .actor_seat = 0,
+                .timestamp_ms = transition.timestamp_ms,
+                .stage_counter = transition.stage_counter,
+            };
         }
     }
 

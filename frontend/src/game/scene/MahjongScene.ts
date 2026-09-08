@@ -1,4 +1,5 @@
-import { Application, Assets, Container, Graphics, Sprite, Text, TextStyle, Texture, FederatedPointerEvent } from 'pixi.js'
+import { Application, Assets, Container, Graphics, Sprite, Text, 
+  TextStyle, Texture, FederatedPointerEvent, type EventMode } from 'pixi.js'
 import { isMobile } from 'pixi.js'
 import {
   SCALE_FACTOR, WINDOW_SCALE, TILE_HEIGHT, TILE_WIDTH,
@@ -184,6 +185,8 @@ export class MahjongScene {
   private destroyed = false
   private hostElement: HTMLElement | null = null
   private presentationMode: ScenePresentationMode = 'game'
+  private interactionPaused = false
+  private savedCenterEventMode: EventMode = 'passive'
   private replayRecordVersion = 0
   private replayClaimLabel: TempLabel | null = null
   private appearance: SceneAppearanceSettings = DEFAULT_SCENE_APPEARANCE
@@ -197,6 +200,18 @@ export class MahjongScene {
 
   setPresentationMode(mode: ScenePresentationMode): void {
     this.presentationMode = mode
+  }
+
+  /** Suspend all scene pointer interaction and hover while a modal is open. */
+  setInteractionPaused(paused: boolean): void {
+    if (this.interactionPaused === paused) return
+    this.interactionPaused = paused
+    if (paused) {
+      this.savedCenterEventMode = this.center.eventMode ?? 'passive'
+      this.center.eventMode = 'none'
+    } else {
+      this.center.eventMode = this.savedCenterEventMode
+    }
   }
 
   revealSpectatorHand(

@@ -91,6 +91,7 @@ struct ActiveSessionSummary {
     bool debug_mode{false};
     bool ended{false};
     bool public_session{true};
+    bool abandon_game{true};
     std::vector<std::string> names;
 };
 

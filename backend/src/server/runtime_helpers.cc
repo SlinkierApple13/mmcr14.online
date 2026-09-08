@@ -727,6 +727,7 @@ Json::Value SerializeActiveSummary(const game::ActiveSessionSummary& summary) {
     payload["recorded"] = summary.recorded;
     payload["ended"] = summary.ended;
     payload["public_session"] = summary.public_session;
+    payload["abandon_game"] = summary.abandon_game;
     Json::Value names(Json::arrayValue);
     for (const auto& name : summary.names) {
         names.append(name);
@@ -923,6 +924,13 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
     }
     config.public_session = public_session.value();
 
+    auto abandon_game = ReadOptionalBool(
+        object, {"abandon_game", "abandonGame"}, "abandon_game", config.abandon_game);
+    if (!abandon_game.ok()) {
+        return abandon_game.status();
+    }
+    config.abandon_game = abandon_game.value();
+
     auto seat_shuffle_period = ReadOptionalInt(
         object, {"seat_shuffle_period", "seatShufflePeriod"}, "seat_shuffle_period", config.seat_shuffle_period);
     if (!seat_shuffle_period.ok()) {
@@ -1020,6 +1028,7 @@ game::PendingSessionSummary BuildPendingSummary(const game::PendingSession& sess
         .forced_end_floor = session.game_config().forced_end_floor,
         .recorded = session.game_config().recorded,
         .public_session = session.game_config().public_session,
+        .abandon_game = session.game_config().abandon_game,
         .can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
         .can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
                      ready_seat_count == static_cast<int>(session.seats().size()),
@@ -1041,6 +1050,7 @@ Json::Value SerializePendingSummary(const game::PendingSessionSummary& summary) 
     payload["auxiliary_timer_ms"] = summary.auxiliary_timer_ms;
     payload["recorded"] = summary.recorded;
     payload["public_session"] = summary.public_session;
+    payload["abandon_game"] = summary.abandon_game;
     payload["can_join"] = summary.can_join;
     payload["can_start"] = summary.can_start;
     Json::Value names(Json::arrayValue);

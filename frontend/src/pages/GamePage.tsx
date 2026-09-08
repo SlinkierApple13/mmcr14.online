@@ -130,6 +130,9 @@ export default function GamePage() {
   const spectatorPredrawInProgressRef = useRef(false)
   const [spectatorManagement, setSpectatorManagement] = useState<SpectatorManagementEntry[]>([])
   const spectatorManagementPendingIdsRef = useRef<Set<string>>(new Set())
+  const [abandonEnabled, setAbandonEnabled] = useState(false)
+  const [myAbandoned, setMyAbandoned] = useState(false)
+  const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
 
   // ── Resolve session id from URL changes ───────────────────────
   useEffect(() => {
@@ -421,6 +424,17 @@ export default function GamePage() {
           return
         }
 
+        if (env.type === 'game.abandon.notify') {
+          const payload = env.payload as { player_id?: number; username?: string; abandoned?: boolean }
+          if (typeof payload.username === 'string' && typeof payload.abandoned === 'boolean') {
+            notify(`${payload.username} ${payload.abandoned ? '已放弃游戏' : '已返回游戏'}`)
+          }
+          if (typeof payload.player_id === 'number' && payload.player_id === auth?.player.player_id) {
+            setMyAbandoned(payload.abandoned === true)
+          }
+          return
+        }
+
         // ── session.snapshot ──────────────────────────────────
         if (env.type === 'session.snapshot') {
           pendingAuthorizedDrawEventRef.current = null
@@ -430,6 +444,8 @@ export default function GamePage() {
             setPendingSnapshot(snap)
             setPhase('pending')
             lastScRef.current = -1
+            setAbandonEnabled(snap.summary.abandon_game !== false)
+            setMyAbandoned(false)
             // Capture ratings for pending phase sidebar
             const pRatings = (snap as unknown as Record<string, unknown>)?.ratings
             if (Array.isArray(pRatings)) {
@@ -440,6 +456,11 @@ export default function GamePage() {
             setPendingSnapshot(null)
             setPhase('active')
             lastScRef.current = snap.state.stage_counter
+            setAbandonEnabled(snap.abandon_game !== false)
+            const ownSeat = snap.seats.find(
+              (seat) => seat.seat_index === snap.viewer.seat_index,
+            )
+            setMyAbandoned(ownSeat?.abandoned === true)
             spectatorPredrawInProgressRef.current = snap.state.last_event_kind === 'start' ||
               (snap.state.last_event_kind === 'predraw' &&
                 (snap.result_event?.ui64_value ?? 15) < 15)
@@ -730,6 +751,19 @@ export default function GamePage() {
   }, [sessionIdHint, token, sceneReady, isSpectator])
 
   useEffect(() => {
+    if (!abandonConfirmOpen) return
+    const timeout = window.setTimeout(() => setAbandonConfirmOpen(false), 5000)
+    return () => window.clearTimeout(timeout)
+  }, [abandonConfirmOpen])
+
+  useEffect(() => {
+    sceneRef.current?.setInteractionPaused(abandonConfirmOpen)
+    return () => {
+      sceneRef.current?.setInteractionPaused(false)
+    }
+  }, [abandonConfirmOpen])
+
+  useEffect(() => {
     if (isSpectator) return
     const nextExpiry = spectatorManagement.reduce<number | null>((nearest, entry) => {
       if (entry.status !== 'pending' || entry.expires_at_ms === undefined) return nearest
@@ -793,6 +827,26 @@ export default function GamePage() {
       (item) => item.spectator_player_id !== entry.spectator_player_id ||
         item.status !== 'approved',
     ))
+  }
+
+  function openAbandonConfirm() {
+    if (!abandonEnabled || myAbandoned) return
+    setAbandonConfirmOpen(true)
+  }
+
+  function confirmAbandon() {
+    setAbandonConfirmOpen(false)
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    sendEnvelope(socket, 'game.abandon', { abandon: true })
+    setMyAbandoned(true)
+  }
+
+  function revertAbandon() {
+    const socket = socketRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    sendEnvelope(socket, 'game.abandon', { abandon: false })
+    setMyAbandoned(false)
   }
 
   const isVirtualPlayer = (playerId: number) => playerId <= 0
@@ -900,6 +954,24 @@ export default function GamePage() {
   // ── Render ───────────────────────────────────────────────────
   return (
     <div className="mahjongGame" style={{ background: sceneAppearance.backgroundColorOutside }}>
+      {abandonConfirmOpen && (
+        <div
+          className="game-abandon-confirm"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onWheel={(e) => { e.preventDefault(); e.stopPropagation() }}
+        >
+          <div className="game-abandon-confirm-card">
+            <p>确定要放弃本局游戏吗？</p>
+            <div>
+              <button type="button" onClick={() => setAbandonConfirmOpen(false)}>取消</button>
+              <button type="button" className="is-danger" onClick={confirmAbandon}>放弃游戏</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* {phase === 'loading' && <div className="game-loading">连接牌桌中…</div>} */}
       <div className="game-page__layout" style={{ background: sceneAppearance.backgroundColorOutside }}>
         <section className="game-page__board-panel">
@@ -966,6 +1038,15 @@ export default function GamePage() {
           <div className="game-page__sidebar-bottom-stack">
             {!isSpectator && (
               <div className="spectator-management-row">
+                {abandonEnabled && (
+                  <button
+                    type="button"
+                    className={`game-abandon-button${myAbandoned ? ' is-abandoned' : ''}`}
+                    onClick={myAbandoned ? revertAbandon : openAbandonConfirm}
+                  >
+                    {myAbandoned ? '取消放弃' : '放弃游戏'}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="scene-appearance-toggle__button"

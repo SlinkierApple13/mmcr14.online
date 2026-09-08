@@ -40,6 +40,7 @@ struct PendingSessionSummary {
     bool recorded{true};
     bool debug_mode{false};
     bool public_session{true};
+    bool abandon_game{true};
     bool can_join{true};
     bool can_start{false};
     std::vector<std::string> names;

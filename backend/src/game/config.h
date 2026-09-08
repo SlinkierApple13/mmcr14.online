@@ -7,6 +7,7 @@ namespace mmcr::game {
 struct GameConfig {
     static constexpr int afk_timeout_times{3};
     static constexpr int afk_tolerance_ms{5000};
+    static constexpr int abandon_afk_timeout_ms{20000};
     static constexpr int dead_time{5000};
     static constexpr int epsilon_ms{10};
     static constexpr int pass_margin_ms{500};
@@ -34,6 +35,7 @@ struct GameConfig {
     bool debug_mode{false};
     bool unranked{false};
     bool public_session{true};
+    bool abandon_game{true};
     std::optional<int> forced_end_floor{std::nullopt};
 
     static constexpr int with_margin(int base) {

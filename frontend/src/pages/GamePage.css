@@ -92,10 +92,85 @@
 
 .spectator-management-row {
   display: flex;
+  gap: 6px;
 }
 
 .spectator-management-row .scene-appearance-toggle__button {
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.game-abandon-button {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(150, 74, 64, 0.55);
+  border-radius: 12px;
+  background: #b5655e;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.game-abandon-button:hover {
+  background: #a85a53;
+}
+
+.game-abandon-button.is-abandoned {
+  background: #e8e4dc;
+  border-color: rgba(96, 96, 96, 0.28);
+  color: #1e2425;
+}
+
+.game-abandon-confirm {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 500;
+}
+
+.game-abandon-confirm-card {
+  background: #fff;
+  border-radius: 14px;
+  padding: 24px 28px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 280px;
+  text-align: center;
+}
+
+.game-abandon-confirm-card p {
+  margin: 0;
+  font-size: 16px;
+  color: #1f2324;
+}
+
+.game-abandon-confirm-card > div {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.game-abandon-confirm-card button {
+  padding: 8px 20px;
+  border: 1px solid rgba(96, 96, 96, 0.28);
+  border-radius: 10px;
+  background: #f7f7f0;
+  color: #1e2425;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.game-abandon-confirm-card button.is-danger {
+  background: #b5655e;
+  border-color: rgba(150, 74, 64, 0.55);
+  color: #fff;
 }
 
 .game-page__sidebar-bottom-stack {

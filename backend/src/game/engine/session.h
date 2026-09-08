@@ -173,6 +173,8 @@ struct Seat {
         avail_melds_other = 0;
         avail_melds_self = {};
         disconnected = false;
+        abandoned = false;
+        afk_since_ms = 0;
     }
 
     auto remove_hand_tile(mahjong::tile_t tile) -> bool {
@@ -202,6 +204,7 @@ struct Seat {
     auto resume() {
         afk_counter = 0;
         disconnected = false;
+        afk_since_ms = 0;
     }
 
     auto leave() {
@@ -229,6 +232,8 @@ struct Seat {
     int auxiliary_ms{0};
     std::int64_t pending_from_ms{0};
     bool disconnected{false};
+    bool abandoned{false};
+    std::int64_t afk_since_ms{0};
 };
 
 // Immutable session bookkeeping assigned at construction.
@@ -323,6 +328,7 @@ public:
         -> util::Status;
     [[nodiscard]] auto player_leaves(std::int64_t player_id) -> util::Status;
     [[nodiscard]] auto player_resumes(std::int64_t player_id) -> util::Status;
+    [[nodiscard]] auto set_abandoned(std::int64_t player_id, bool abandon) -> util::Status;
     [[nodiscard]] auto build_snapshot_for_player_id(std::int64_t player_id) const
         -> util::StatusOr<Json::Value>;
     [[nodiscard]] auto build_snapshot_for_spectator(int perspective_seat = 0) const -> Json::Value;
@@ -368,6 +374,7 @@ private:
     void execute_transition();
     void broadcast_claim(const Event& event);
     void process_transition(const Event& transition);
+    void broadcast_abandon_notify(int seat, bool abandoned);
     [[nodiscard]] auto send_message(int target_seat, const Json::Value& message, int delay_ms = 0)
         -> int;
     void schedule_pending_start(int seat,
