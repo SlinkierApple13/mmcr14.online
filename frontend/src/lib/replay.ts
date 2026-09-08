@@ -37,6 +37,9 @@ type ReplayBaseSnapshot = {
   state: GameState
   result_event: GameEventSnapshot | null
   last_discarder_seat: number | null
+  wall_slots: Array<number | null> | null
+  wall_front_stack: number
+  wall_back_stack: number
 }
 
 export interface ReplayTimelineEntry {
@@ -148,6 +151,9 @@ function cloneBaseSnapshot(snapshot: ReplayBaseSnapshot): ReplayBaseSnapshot {
     state: cloneState(snapshot.state),
     result_event: cloneResultEvent(snapshot.result_event),
     last_discarder_seat: snapshot.last_discarder_seat,
+    wall_slots: snapshot.wall_slots ? [...snapshot.wall_slots] : null,
+    wall_front_stack: snapshot.wall_front_stack,
+    wall_back_stack: snapshot.wall_back_stack,
   }
 }
 
@@ -354,6 +360,11 @@ function formatEntryLabel(category: ReplayCategory, event: ReplayRecordEvent): s
 }
 
 function createInitialBaseSnapshot(roundRecord: ReplayRoundRecord): ReplayBaseSnapshot {
+  const startSnapshot = roundRecord.round_start_snapshot
+  const wallSlots = Array.isArray(startSnapshot.wall_tiles) &&
+    startSnapshot.wall_tiles.length === TOTAL_WALL_TILE_COUNT
+    ? startSnapshot.wall_tiles.map((tile) => (typeof tile === 'number' && tile > 0 ? tile : null))
+    : null
   return {
     session_id: parseSessionId(roundRecord.header.session_identifier),
     seats: roundRecord.initial_seats.map((seat, seatIndex) => ({
@@ -382,6 +393,33 @@ function createInitialBaseSnapshot(roundRecord: ReplayRoundRecord): ReplayBaseSn
     },
     result_event: null,
     last_discarder_seat: null,
+    wall_slots: wallSlots,
+    wall_front_stack: typeof startSnapshot.wall_front_index === 'number' ? startSnapshot.wall_front_index : 0,
+    wall_back_stack: typeof startSnapshot.wall_back_index === 'number' ? startSnapshot.wall_back_index : 0,
+  }
+}
+
+function consumeWallFront(base: ReplayBaseSnapshot): void {
+  const slots = base.wall_slots
+  if (!slots) return
+  const index = (base.wall_front_stack % 68) * 2
+  if (slots[index] !== null && slots[index] !== undefined) {
+    slots[index] = null
+  } else {
+    if (slots[index + 1] !== undefined) slots[index + 1] = null
+    base.wall_front_stack = (base.wall_front_stack + 1) % 68
+  }
+}
+
+function consumeWallBack(base: ReplayBaseSnapshot): void {
+  const slots = base.wall_slots
+  if (!slots) return
+  const index = (base.wall_back_stack % 68) * 2
+  if (slots[index] !== null && slots[index] !== undefined) {
+    slots[index] = null
+  } else {
+    if (slots[index + 1] !== undefined) slots[index + 1] = null
+    base.wall_back_stack = (base.wall_back_stack + 67) % 68
   }
 }
 
@@ -424,6 +462,9 @@ function applyTransition(
     case 'predraw': {
       const drawnTiles = event.drawn_tiles ?? []
       actor.hand_tiles.push(...drawnTiles)
+      for (let count = 0; count < drawnTiles.length; count += 1) {
+        consumeWallFront(base)
+      }
       base.state.remaining_tile_count = Math.max(
         0,
         base.state.remaining_tile_count - drawnTiles.length,
@@ -432,6 +473,11 @@ function applyTransition(
       return
     }
     case 'draw_tile': {
+      if (event.draw_from_back) {
+        consumeWallBack(base)
+      } else {
+        consumeWallFront(base)
+      }
       if (typeof event.tile === 'number') {
         actor.drawn_tile = event.tile
       }
@@ -692,6 +738,10 @@ export function materializeReplaySnapshot(
   revealAllHands: boolean,
 ): ActiveSessionSnapshot {
   return buildReplaySnapshot(entry.snapshotBase, watchingSeat, revealAllHands)
+}
+
+export function getReplayWallSlots(entry: ReplayTimelineEntry | null): Array<number | null> | null {
+  return entry?.snapshotBase.wall_slots ?? null
 }
 
 export function materializeReplayPayload(

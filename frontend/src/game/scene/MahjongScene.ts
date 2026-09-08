@@ -21,6 +21,7 @@ import { Hand } from './Hand'
 import { Display, Countdown, DirLabel, TempLabel } from './Display'
 import { OptDisplay, type AutoWinMode } from './OptDisplay'
 import { MeldChoices, type MeldViewerSnapshot } from './MeldChoices'
+import { WallDisplay } from './WallDisplay'
 import type { ActiveSessionSnapshot, SeatSnapshot } from './types'
 
 export type { AutoWinMode, WaitInfoData }
@@ -189,6 +190,7 @@ export class MahjongScene {
   private savedCenterEventMode: EventMode = 'passive'
   private replayRecordVersion = 0
   private replayClaimLabel: TempLabel | null = null
+  private wallDisplay: WallDisplay | null = null
   private appearance: SceneAppearanceSettings = DEFAULT_SCENE_APPEARANCE
   private backgroundImageSource: string | null = null
   private backgroundImageLoadToken = 0
@@ -212,6 +214,21 @@ export class MahjongScene {
     } else {
       this.center.eventMode = this.savedCenterEventMode
     }
+  }
+
+  /** Show or hide the replay wall display overlay. */
+  setWallDisplayVisible(visible: boolean): void {
+    this.wallDisplay?.setVisible(visible)
+  }
+
+  /** Update the wall slots from the current replay timeline entry. */
+  setWallDisplayState(slots: Array<number | null> | null): void {
+    this.wallDisplay?.setSlots(slots)
+  }
+
+  /** Rotate the wall display so the watched seat sits at the bottom. */
+  setWallDisplayPerspective(seatIndex: number): void {
+    this.wallDisplay?.setPerspectiveSeat(seatIndex)
   }
 
   revealSpectatorHand(
@@ -1118,6 +1135,9 @@ export class MahjongScene {
     this.volDisplay.visible = false
     this.optDisplay.visible = this.presentationMode === 'game'
     this.waitDisplay.visible = this.presentationMode === 'game'
+
+    this.center.sortableChildren = true
+    this.wallDisplay = new WallDisplay(c)
 
     if (!this.app) return
     this.redrawBackground()

@@ -799,6 +799,43 @@ void NormalizeReplaySeedFields(Json::Value& round_record) {
     }
 }
 
+// Rebuild the full round-start wall state from the stored wall seeds and
+// attach it to the payload. The wall is deterministic given the seeds, so
+// replays can show the wall without persisting all 136 tiles per round.
+void AttachReplayWallState(Json::Value& round_record) {
+    Json::Value& round_start_snapshot = round_record["round_start_snapshot"];
+    if (!round_start_snapshot.isObject()) {
+        return;
+    }
+
+    const Json::Value& wall_seeds = round_start_snapshot["wall_seeds"];
+    if (!wall_seeds.isArray() || wall_seeds.empty()) {
+        return;
+    }
+
+    std::vector<std::uint64_t> seeds;
+    seeds.reserve(wall_seeds.size());
+    for (const auto& seed : wall_seeds) {
+        if (seed.isUInt64()) {
+            seeds.push_back(seed.asUInt64());
+        } else if (seed.isUInt()) {
+            seeds.push_back(seed.asUInt());
+        } else {
+            return;
+        }
+    }
+
+    game::Wall wall;
+    wall.prepare(std::move(seeds), {});
+    Json::Value wall_tiles(Json::arrayValue);
+    for (const auto tile : wall.tiles()) {
+        wall_tiles.append(Json::UInt(static_cast<unsigned int>(tile)));
+    }
+    round_start_snapshot["wall_tiles"] = std::move(wall_tiles);
+    round_start_snapshot["wall_front_index"] = Json::UInt64(wall.front_stack_index());
+    round_start_snapshot["wall_back_index"] = Json::UInt64(wall.back_stack_index());
+}
+
 util::Status RejectImmutableGameConfigField(const Json::Value& object,
                         std::initializer_list<std::string_view> names,
                         std::string_view label) {
@@ -1892,6 +1929,7 @@ util::StatusOr<Json::Value> BuildReplaySessionPayload(
     payload["player_names"] = std::move(player_names);
     Json::Value round_records_payload(Json::arrayValue);
     for (auto& round_record : round_records.value()) {
+        AttachReplayWallState(round_record);
         NormalizeReplaySeedFields(round_record);
         round_records_payload.append(std::move(round_record));
     }

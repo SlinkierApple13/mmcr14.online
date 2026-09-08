@@ -264,6 +264,9 @@ export interface ReplayRoundStartSnapshot {
   seat_shuffle_seed?: string | number | null
   wall_seeds: Array<string | number>
   player_ids: number[]
+  wall_tiles?: number[]
+  wall_front_index?: number
+  wall_back_index?: number
 }
 
 export interface ReplayInitialSeat {

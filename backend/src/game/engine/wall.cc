@@ -95,5 +95,15 @@ auto Wall::size() const noexcept -> std::size_t {
 auto Wall::empty() const noexcept -> bool {
     return size() == 0;
 }
+auto Wall::tiles() const noexcept -> const std::array<mahjong::tile_t, 136>& {
+    return tiles_;
+}
 
+auto Wall::front_stack_index() const noexcept -> std::size_t {
+    return front_stack_index_;
+}
+
+auto Wall::back_stack_index() const noexcept -> std::size_t {
+    return back_stack_index_;
+}
 }  // namespace mmcr::game

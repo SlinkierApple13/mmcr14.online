@@ -285,6 +285,7 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
                     ? header["round_number"].asUInt64()
                     : 0;
                 if (rn > after_round) {
+                    AttachReplayWallState(round_record);
                     NormalizeReplaySeedFields(round_record);
                     new_rounds.append(std::move(round_record));
                 }

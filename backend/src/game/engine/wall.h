@@ -18,6 +18,9 @@ public:
     [[nodiscard]] auto draw(int count) -> util::StatusOr<std::vector<mahjong::tile_t>>;
     [[nodiscard]] auto size() const noexcept -> std::size_t;
     [[nodiscard]] auto empty() const noexcept -> bool;
+    [[nodiscard]] auto tiles() const noexcept -> const std::array<mahjong::tile_t, 136>&;
+    [[nodiscard]] auto front_stack_index() const noexcept -> std::size_t;
+    [[nodiscard]] auto back_stack_index() const noexcept -> std::size_t;
 
     auto operator==(const Wall&) const -> bool = default;
 

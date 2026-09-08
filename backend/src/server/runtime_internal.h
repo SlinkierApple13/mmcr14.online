@@ -137,6 +137,7 @@ void ApplyCorsHeaders(const drogon::HttpResponsePtr& response);
 
 [[nodiscard]] std::string FormatHexSeed(std::uint64_t value);
 void NormalizeReplaySeedFields(Json::Value& round_record);
+void AttachReplayWallState(Json::Value& round_record);
 
 // ---------------------------------------------------------------------------
 // Game/queue config parsing

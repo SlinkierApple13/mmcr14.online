@@ -10,6 +10,7 @@ import {
   buildReplayTimeline,
   clampReplayDelay,
   findFinalTransitionIndex,
+  getReplayWallSlots,
   materializeReplayPayload,
   materializeReplaySnapshot,
   parseWatchingSeat,
@@ -76,6 +77,7 @@ export default function ReplayPage() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [hideOtherHands, setHideOtherHands] = useState(false)
+  const [showWall, setShowWall] = useState(false)
   // const [appearancePanelOpen, setAppearancePanelOpen] = useState(false)
   const [requestedRoundNumber, setRequestedRoundNumber] = useState(initialRoundNumber)
   const [watchingSeat, setWatchingSeat] = useState(initialWatchingSeat)
@@ -102,6 +104,7 @@ export default function ReplayPage() {
   const currentIndexRef = useRef(0)
   const watchingSeatRef = useRef(watchingSeat)
   const revealAllHandsRef = useRef(!hideOtherHands)
+  const showWallRef = useRef(showWall)
 
   const roundRecords = sessionPayload?.round_records ?? []
   const roundCount = sessionPayload?.round_count ?? Math.max(roundRecords.length, 1)
@@ -122,6 +125,7 @@ export default function ReplayPage() {
   const wallSeeds = activeRoundRecord?.round_start_snapshot.wall_seeds ?? []
   const wallSeedCopyText = wallSeeds.map((seed) => normalizeReplaySeedFragment(seed)).join('')
   const recordVersion = activeRoundRecord?.version ?? 0
+  const hasWallData = recordVersion >= 3 && Array.isArray(activeRoundRecord?.round_start_snapshot.wall_tiles)
 
   useEffect(() => {
     sceneRef.current?.setReplayRecordVersion(recordVersion)
@@ -174,6 +178,15 @@ export default function ReplayPage() {
     watchingSeatRef.current = watchingSeat
     revealAllHandsRef.current = revealAllHands
   }, [watchingSeat, revealAllHands])
+
+  useEffect(() => {
+    showWallRef.current = showWall
+    const entry = timeline[currentIndex] ?? null
+    const slots = getReplayWallSlots(entry)
+    sceneRef.current?.setWallDisplayPerspective(watchingSeat)
+    sceneRef.current?.setWallDisplayState(slots)
+    sceneRef.current?.setWallDisplayVisible(showWall && slots !== null)
+  }, [showWall, currentIndex, timeline, sceneReady, watchingSeat])
 
   function flushIndex(index: number) {
     const entry = timeline[index]
@@ -439,9 +452,12 @@ export default function ReplayPage() {
         case 'p': case 'ArrowUp':
           if (selectedRoundNumber <= 1) break
           stopPlayback(); setRequestedRoundNumber(selectedRoundNumber - 1); break
-         case '\\': case 'ArrowDown':
+        case '\\': case 'ArrowDown':
           if (selectedRoundNumber >= roundCount) break
           stopPlayback(); setRequestedRoundNumber(selectedRoundNumber + 1); break
+        case 'l': 
+          if (!hasWallData) break
+          stopPlayback(); setShowWall(v => !v); break
       }
     }
     document.addEventListener('keydown', handler)
@@ -588,16 +604,17 @@ export default function ReplayPage() {
             </div>
 
             <div className="replay-control-grid">
-              <button onClick={() => { stopPlayback(); applyIndex(firstPlayableIndex) }} disabled={timeline.length === 0}>&lt;&lt;</button>
-              <button onClick={() => { stopPlayback(); applyIndex(finalTransitionIndex) }} disabled={timeline.length === 0}>&gt;&gt;</button>
               <button onClick={() => { stopPlayback(); applyIndex(currentIndexRef.current - 1) }} disabled={!canMoveBackward}>&lt;</button>
               <button onClick={() => { stopPlayback(); applyIndex(currentIndexRef.current + 1) }} disabled={!canMoveForward}>&gt;</button>
-              <button onClick={() => setPlaying((value) => !value)} disabled={!canMoveForward && !playing}>{playing ? '暂停' : '自动播放'}</button>
-              <button onClick={() => { stopPlayback(); setHideOtherHands((value) => !value) }}>{hideOtherHands ? '显示他家手牌' : '隐藏他家手牌'}</button>
+              <button onClick={() => { stopPlayback(); applyIndex(firstPlayableIndex) }} disabled={timeline.length === 0}>&lt;&lt;</button>
+              <button onClick={() => { stopPlayback(); applyIndex(finalTransitionIndex) }} disabled={timeline.length === 0}>&gt;&gt;</button>
               <button onClick={() => { stopPlayback(); if (selectedRoundNumber > 1) setRequestedRoundNumber(selectedRoundNumber - 1) }} disabled={selectedRoundNumber <= 1}>上一局</button>
               <button onClick={() => { stopPlayback(); if (selectedRoundNumber < roundCount) setRequestedRoundNumber(selectedRoundNumber + 1) }} disabled={selectedRoundNumber >= roundCount}>下一局</button>
               <button onClick={() => { stopPlayback(); setWatchingSeat((watchingSeat + 3) % 4) }}>上家</button>
               <button onClick={() => { stopPlayback(); setWatchingSeat((watchingSeat + 1) % 4) }}>下家</button>
+              <button onClick={() => setPlaying((value) => !value)} disabled={!canMoveForward && !playing}>{playing ? '暂停' : '自动播放'}</button>
+              <button onClick={() => { stopPlayback(); setHideOtherHands((value) => !value) }}>{hideOtherHands ? '显示他家手牌' : '隐藏他家手牌'}</button>
+              <button onClick={() => { stopPlayback(); setShowWall((value) => !value) }} disabled={!hasWallData}>{showWall ? '隐藏牌墙' : '展示牌墙'}</button>
             </div>
 
             {replayRatings && replayRatings.length > 0 && (
