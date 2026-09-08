@@ -1036,7 +1036,7 @@ export default function GamePage() {
             })}
           </div>
           <div className="game-page__sidebar-bottom-stack">
-            {!isSpectator && (
+            {phase === 'active' && !isSpectator && (
               <div className="spectator-management-row">
                 {abandonEnabled && (
                   <button
@@ -1083,7 +1083,7 @@ export default function GamePage() {
                 设置
               </button>
             </div>
-            {spectatorManagementOpen && (
+            {spectatorManagementOpen && phase === 'active' && (
             <div className="scene-appearance-toggle__panel spectator-management-panel">
               <div className="scene-appearance-toggle__card spectator-management-card">
                 <strong>观战管理</strong>

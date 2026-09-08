@@ -110,7 +110,7 @@ function formatTimerTriple(primaryTimerMs: number, secondaryTimerMs: number, aux
 
 function formatEarlyEnd(forcedEndFloor: number | null, abandonGame: boolean): string {
   const parts: string[] = []
-  if (abandonGame) parts.push('主动放弃')
+  if (abandonGame) parts.push('放弃')
   if (forcedEndFloor !== null && forcedEndFloor !== undefined) {
     parts.push(`${forcedEndFloor} 点击飞`)
   }
