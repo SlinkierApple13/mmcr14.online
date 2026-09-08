@@ -19,7 +19,6 @@
 #include "game/engine/timer.h"
 #include "game/engine/wall.h"
 #include "game/rating_snapshot.h"
-#include "util/my_queue.h"
 #include "util/status.h"
 #include "external/qingque/rules/qingque.h"
 
