@@ -157,6 +157,7 @@ ActiveSession::ActiveSession(random::SeedContainer* seed_container,
     } else {
         wall_.emplace<Wall>();
     }
+    mode_ = CreateModeController(config_);
     init();
 }
 
@@ -439,6 +440,11 @@ void ActiveSession::init() {
         }
     }
     random_pause_rng_.seed(seed_container_->Extract());
+    if (mode_ != nullptr) {
+        // Consumed BEFORE the first kStart's wall seeds so that mode data
+        // (e.g. pass-five-gates targets) is reproducible in replays.
+        mode_->OnSessionStart(seed_container_);
+    }
     (void)handle_event(Event{ .kind = EventKind::kStart, .actor_seat = 0 });
     set_timer(GameConfig::minimal_transition_ms, 0);
 }
@@ -1225,6 +1231,7 @@ void ActiveSession::execute_transition() {
     };
 
     auto next_round_transition = [this]() {
+        // 击飞 (forced end floor): any seat below the floor ends the session.
         if (config_.forced_end_floor.has_value()) {
             for (int seat = 0; seat < 4; ++seat) {
                 if (seats_[seat].score < *config_.forced_end_floor) {
@@ -1232,13 +1239,35 @@ void ActiveSession::execute_transition() {
                 }
             }
         }
-        const auto configured_round_count = static_cast<std::uint64_t>(std::max(config_.round_count, 0));
-        return Event{
-            .kind = (configured_round_count != 0 && state_.round_counter >= configured_round_count)
-                ? EventKind::kEnd
-                : EventKind::kStart,
-            .actor_seat = 0,
-        };
+        const EventKind next_kind = (mode_ != nullptr)
+            ? mode_->NextTransition(state_.round_counter, config_.round_count)
+            : [this]() {
+                  const auto configured_round_count =
+                      static_cast<std::uint64_t>(std::max(config_.round_count, 0));
+                  return (configured_round_count != 0 &&
+                          state_.round_counter >= configured_round_count)
+                      ? EventKind::kEnd
+                      : EventKind::kStart;
+              }();
+        return Event{ .kind = next_kind, .actor_seat = 0 };
+    };
+
+    // Runs after a winning hand's scores have been applied. Lets the mode
+    // decide whether the session ends immediately (e.g. all five gates
+    // completed). raw_fans is the union of fan indices across every winning
+    // decomposition ("以原始的为准", not the highest-fan split).
+    auto settle_round = [this, &transition, &next_round_transition](int actor_seat,
+                                                                    const std::vector<int>& raw_fans) {
+        std::array<int, 4> scores{};
+        for (int i = 0; i < 4; ++i) {
+            scores[i] = seats_[i].score;
+        }
+        const TransitionDecision mode_decision = (mode_ != nullptr)
+            ? mode_->OnRoundSettled(actor_seat, raw_fans, scores)
+            : TransitionDecision::kContinue;
+        state_.next_transition = (mode_decision == TransitionDecision::kEnd)
+            ? Event{ .kind = EventKind::kEnd, .actor_seat = 0 }
+            : next_round_transition();
     };
 
     // if should draw but wall empty, mark as drawn game instead
@@ -1369,6 +1398,10 @@ void ActiveSession::execute_transition() {
                 } else {
                     snapshot.player_ids[i] = -1;
                 }
+            }
+            if (mode_ != nullptr) {
+                mode_->SetSeatPlayers(snapshot.player_ids);
+                mode_->OnRoundStart(state_.round_counter);
             }
             // 3. prepare the wall
             if (config_.duplicate_mode) {
@@ -1720,7 +1753,7 @@ void ActiveSession::execute_transition() {
             seats_[transition.actor_seat].score += score_inc;
             seats_[transition_queue_.back().actor_seat].score -= score_inc;
             // set next transition
-            state_.next_transition = next_round_transition();
+            settle_round(transition.actor_seat, RawFanIndices(hand));
         } break;
         
         case EventKind::kRobAddedKongWin: {
@@ -1757,7 +1790,7 @@ void ActiveSession::execute_transition() {
             seats_[transition.actor_seat].score += score_inc;
             seats_[transition_queue_.back().actor_seat].score -= score_inc;
             // set next transition
-            state_.next_transition = next_round_transition();
+            settle_round(transition.actor_seat, RawFanIndices(hand));
         } break;
         
         case EventKind::kSelfDrawnWin: {
@@ -1810,7 +1843,7 @@ void ActiveSession::execute_transition() {
                 }
             }
             // set next transition
-            state_.next_transition = next_round_transition();
+            settle_round(transition.actor_seat, RawFanIndices(hand));
         } break;
         
         case EventKind::kDrawnGame: {
@@ -1823,6 +1856,16 @@ void ActiveSession::execute_transition() {
             transition.final_scores.reserve(4);
             for (int seat = 0; seat < 4; ++seat) {
                 transition.final_scores.push_back(seats_[seat].score);
+            }
+            if (mode_ != nullptr) {
+                std::array<int, 4> final_scores{};
+                for (int seat = 0; seat < 4; ++seat) {
+                    final_scores[seat] = seats_[seat].score;
+                }
+                Json::Value mode_result = mode_->OnSessionEnd(final_scores);
+                if (!mode_result.isNull() && !mode_result.empty()) {
+                    transition.mode_result = std::move(mode_result);
+                }
             }
             end_session(transition.timestamp_ms, false);
         } break;

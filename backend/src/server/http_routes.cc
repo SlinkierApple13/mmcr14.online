@@ -48,6 +48,33 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
         },
         {drogon::Get});
 
+    // Built-in play-mode presets (from the static registry) for the lobby's
+    // mode picker. Public: no authentication required.
+    drogon::app().registerHandler(
+        "/api/v1/game/modes",
+        [](const drogon::HttpRequestPtr&,
+           std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
+            Json::Value modes(Json::arrayValue);
+            for (const auto& preset : game::ModePresets()) {
+                Json::Value entry(Json::objectValue);
+                entry["id"] = preset.id;
+                entry["name"] = preset.name;
+                // Surface default client-settable parameters (knockout_score)
+                // as a JSON object so the lobby can prefill the room form.
+                Json::Value default_config(Json::objectValue);
+                if (preset.default_pass_five_gates.has_value()) {
+                    default_config["knockout_score"] =
+                        preset.default_pass_five_gates->knockout_score;
+                }
+                entry["default_config"] = std::move(default_config);
+                modes.append(std::move(entry));
+            }
+            Json::Value payload(Json::objectValue);
+            payload["modes"] = std::move(modes);
+            callback(NewJsonResponse(std::move(payload)));
+        },
+        {drogon::Get});
+
     drogon::app().registerHandler(
         "/api/v1/auth/register",
         [state](const drogon::HttpRequestPtr& request,

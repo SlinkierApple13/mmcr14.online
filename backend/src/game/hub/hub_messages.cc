@@ -157,6 +157,8 @@ PendingSessionSummary BuildPendingSummary(const PendingSession& session) {
             : occupied_seat_count < static_cast<int>(session.seats().size()),
         .can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
                      ready_seat_count == static_cast<int>(session.seats().size()),
+        .mode = std::string(GameModeName(session.game_config().mode)),
+        .mode_name = std::string(ModeDisplayName(session.game_config().mode)),
         .names = std::move(names),
     };
 }
@@ -183,6 +185,8 @@ Json::Value SerializePendingSummary(const PendingSessionSummary& summary) {
     payload["duplicate_mode"] = summary.duplicate_mode;
     payload["can_join"] = summary.can_join;
     payload["can_start"] = summary.can_start;
+    payload["mode"] = summary.mode;
+    payload["mode_name"] = summary.mode_name;
     Json::Value names(Json::arrayValue);
     for (const auto& name : summary.names) {
         names.append(name);
@@ -220,6 +224,8 @@ Json::Value SerializeActiveSummaryList(const std::vector<ActiveSessionSummary>& 
         entry["ended"] = session.ended;
         entry["public_session"] = session.public_session;
         entry["abandon_game"] = session.abandon_game;
+        entry["mode"] = session.mode;
+        entry["mode_name"] = session.mode_name;
         Json::Value names(Json::arrayValue);
         for (const auto& name : session.names) {
             names.append(name);
@@ -234,6 +240,7 @@ Json::Value SerializePendingSeat(const PendingSeat& seat) {
     Json::Value payload(Json::objectValue);
     payload["seat_index"] = seat.seat_index;
     payload["ready"] = seat.ready;
+    payload["team"] = seat.team < 0 ? Json::Value(Json::nullValue) : Json::Value(seat.team);
     const auto player = seat.player.lock();
     if (player != nullptr) {
         payload["player_id"] = Json::Int64(player->player_id);
@@ -346,6 +353,8 @@ ActiveSessionSummary BuildActiveSummary(const ActiveSession& session) {
     summary.public_session = session.public_session();
     summary.abandon_game = session.config().abandon_game;
     summary.duplicate_mode = session.config().duplicate_mode;
+    summary.mode = std::string(GameModeName(session.config().mode));
+    summary.mode_name = std::string(ModeDisplayName(session.config().mode));
     for (const auto& seat : session.seats()) {
         const auto player = seat.player.lock();
         if (player != nullptr) {

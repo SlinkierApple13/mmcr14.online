@@ -17,9 +17,11 @@
 #include "external/qingque/basic/mahjong.h"
 #include "game/config.h"
 #include "game/engine/duplicate_wall.h"
+#include "game/engine/event_kind.h"
 #include "game/engine/hand.h"
 #include "game/engine/timer.h"
 #include "game/engine/wall.h"
+#include "game/mode/mode_controller.h"
 #include "game/rating_snapshot.h"
 #include "util/status.h"
 #include "external/qingque/rules/qingque.h"
@@ -35,28 +37,7 @@ class GameRecordManager;
 namespace mmcr::game {
 
 class GameHub;
-
-enum class EventKind : std::uint8_t {
-    kNone,
-    kStart,
-    kPredraw,
-    kDrawTile,
-    kDiscardTile,
-    kChow,
-    kPung,
-    kMeldedKong,
-    kAddedKong,
-    kConcealedKong,
-    kDiscardWin,
-    kRobAddedKongWin,
-    kSelfDrawnWin,
-    kPass,
-    kFinalPass,
-    kDrawnGame,
-    kEnd,
-    kPlayerLeft,
-    kPlayerResumed,
-};
+class ModeController;
 
 struct RoundStartSnapshot {
     std::optional<uint64_t> seat_shuffle_seed; // empty if no shuffle
@@ -90,6 +71,7 @@ struct Event {
     std::vector<int> final_scores{};
     std::optional<std::int64_t> round_turn;
     std::optional<std::vector<PlayerRatingSnapshot>> ratings;
+    Json::Value mode_result{Json::nullValue};  // mode-specific result (e.g. winner team)
     std::int64_t timestamp_ms{0};
     std::uint64_t stage_counter{0};
 };
@@ -379,6 +361,7 @@ private:
     std::size_t duplicate_shuffle_counter_{0};
     Timer transition_timer_;
     std::array<Timer, 4> pending_start_timers_{};
+    std::unique_ptr<ModeController> mode_;
 
     [[nodiscard]] auto handle_event(const Event& event) -> util::Status;
 

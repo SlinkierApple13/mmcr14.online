@@ -22,6 +22,7 @@
 #include "duplicate/manager.h"
 #include "game/engine/session.h"
 #include "game/hub/hub.h"
+#include "game/mode/mode_registry.h"
 #include "random/seed.h"
 #include "ranking/service.h"
 #include "replay/manager.h"
