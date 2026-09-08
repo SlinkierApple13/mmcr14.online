@@ -635,14 +635,21 @@ auto ActiveSession::build_snapshot_for_player(
         state_payload["final_scores"] = Json::Value(Json::nullValue);
     }
     auto last_transition = transition_queue_.empty() ? std::nullopt : std::make_optional(transition_queue_.back());
-        if (last_transition.has_value() &&
-            (last_transition->kind == EventKind::kDiscardWin ||
-             last_transition->kind == EventKind::kRobAddedKongWin) &&
-            transition_queue_.size() >= 2) {
-            state_payload["result_source_actor"] = transition_queue_[transition_queue_.size() - 2].actor_seat;
-        } else {
-            state_payload["result_source_actor"] = Json::Value(Json::nullValue);
-        }
+    if (context_event != nullptr &&
+        (context_event->kind == EventKind::kDiscardWin ||
+         context_event->kind == EventKind::kRobAddedKongWin) &&
+        context_event->result_source_actor.has_value()) {
+        // Live win messages are built before the win is appended to the
+        // transition queue, so derive the shooter from the event itself.
+        state_payload["result_source_actor"] = *context_event->result_source_actor;
+    } else if (last_transition.has_value() &&
+        (last_transition->kind == EventKind::kDiscardWin ||
+         last_transition->kind == EventKind::kRobAddedKongWin) &&
+        transition_queue_.size() >= 2) {
+        state_payload["result_source_actor"] = transition_queue_[transition_queue_.size() - 2].actor_seat;
+    } else {
+        state_payload["result_source_actor"] = Json::Value(Json::nullValue);
+    }
     if (last_transition.has_value()) {
         state_payload["last_actor"] = last_transition->actor_seat;
         state_payload["last_event_kind"] = std::string(EventKindName(last_transition->kind));

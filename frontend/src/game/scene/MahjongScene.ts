@@ -76,6 +76,9 @@ function readResultSourceSeat(
     if (typeof state.result_source_actor === 'number') {
       return state.result_source_actor
     }
+    if (typeof state.last_actor === 'number') {
+      return state.last_actor
+    }
     return fallbackSeat
   }
 
