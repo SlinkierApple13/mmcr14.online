@@ -40,6 +40,8 @@ export interface PendingSessionSummary {
   duplicate_mode?: boolean
   can_join: boolean
   can_start: boolean
+  mode?: string
+  mode_name?: string
   names: string[]
 }
 
@@ -59,12 +61,15 @@ export interface ActiveSessionSummary {
   public_session: boolean
   abandon_game: boolean
   duplicate_mode?: boolean
+  mode?: string
+  mode_name?: string
   names: string[]
 }
 
 export interface PendingSeatSnapshot {
   seat_index: number
   ready: boolean
+  team: number | null
   player_id: number | null
   username: string | null
 }
@@ -159,7 +164,35 @@ export interface ActiveSessionSnapshot {
     seat_index?: number
     grants?: Array<{ target_player_id: number; seat_index: number }>
   }
+  mode_state?: ModeState | null
 }
+
+// ── Play modes ─────────────────────────────────────────────────────
+
+export type ModeTeamId = 0 | 1
+
+export interface ModeTeamEntry {
+  player_id: number
+  team: ModeTeamId
+}
+
+export interface FiveGatesModeState {
+  mode: 'pass_five_gates'
+  targets: string[]
+  completed: [number, number] | number[]
+  teams: ModeTeamEntry[]
+  winner_team: number | null
+  knockout_score: number
+}
+
+export interface FiveGatesModeUpdate {
+  team: ModeTeamId
+  completed_now: string[]
+  completed: number[]
+  winner_team: number | null
+}
+
+export type ModeState = FiveGatesModeState | Record<string, unknown> | null
 
 export type SessionSnapshot = PendingSnapshot | ActiveSessionSnapshot
 
@@ -207,6 +240,7 @@ export interface GameEventPayload {
   seat_status: CompactSeatStatus[]
   spectator?: boolean
   reveal_all_hands?: boolean
+  mode_update?: FiveGatesModeUpdate
 }
 
 export interface PassAckPayload {
@@ -244,6 +278,8 @@ export interface ReplayGameConfig {
   recorded: boolean
   unranked?: boolean
   duplicate_mode?: boolean
+  mode?: string
+  mode_config?: Record<string, unknown>
 }
 
 export interface ReplayRecordHeader {

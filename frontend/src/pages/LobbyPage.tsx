@@ -61,14 +61,25 @@ const AUXILIARY_TIMER_SECONDS_MIN = 0
 const AUXILIARY_TIMER_SECONDS_MAX = 45
 const TOTAL_ROUNDS_MIN = 1
 const TOTAL_ROUNDS_MAX = 32
+const KNOCKOUT_SCORE_MIN = 0
+const KNOCKOUT_SCORE_MAX = 100000
+
+// Play modes beyond the built-in room kinds. The backend keeps the mode id in
+// the session summary, so the lobby can label rows created with a village rule.
+const PASS_FIVE_GATES_MODE = 'pass_five_gates'
+const MODE_LABELS: Record<string, string> = {
+  standard: '标准',
+  [PASS_FIVE_GATES_MODE]: '过五关',
+}
 
 type LobbySessionRow = PendingSessionSummary
 
-type SessionMode = 'duplicate' | 'ranked' | 'unranked' | 'unrecorded' | 'singleplayer'
+type SessionMode = 'duplicate' | 'ranked' | 'unranked' | 'unrecorded' | 'singleplayer' | 'pass_five_gates'
 
 interface CreateQueueValues {
   mode: SessionMode
   duplicate_token?: string
+  knockout_score?: number
   primary_timer_seconds: number
   secondary_timer_seconds: number
   auxiliary_timer_seconds: number
@@ -124,7 +135,11 @@ function formatSessionMode(record: {
   singleplayer?: boolean
   recorded: boolean
   unranked?: boolean
+  mode?: string
 }): string {
+  if (record.mode !== undefined && record.mode !== '' && record.mode !== 'standard') {
+    return MODE_LABELS[record.mode] ?? record.mode
+  }
   if (record.debug_mode) return '调试模式'
   if (record.duplicate_mode) return '复式'
   if (record.singleplayer) return '单人游戏'
@@ -180,8 +195,9 @@ function CreateQueueModal({
   const watchedMode = (Form.useWatch('mode', form) ?? 'ranked') as SessionMode
   const watchedToken = Form.useWatch('duplicate_token', form) ?? ''
   const debugMode = Form.useWatch('debug_mode', form) ?? false
-  const modeLocksDebug = watchedMode === 'duplicate' || watchedMode === 'ranked' || watchedMode === 'unranked'
+  const modeLocksDebug = watchedMode === 'duplicate' || watchedMode === 'ranked' || watchedMode === 'unranked' || watchedMode === PASS_FIVE_GATES_MODE
   const isDuplicate = watchedMode === 'duplicate'
+  const isPassFiveGates = watchedMode === PASS_FIVE_GATES_MODE
   const [tokenInfo, setTokenInfo] = useState<{ round_count: number; expires_at_ms: number; expired: boolean } | null>(null)
   const [tokenError, setTokenError] = useState('')
   const [tokenChecking, setTokenChecking] = useState(false)
@@ -197,6 +213,14 @@ function CreateQueueModal({
       form.setFieldValue('abandon_game', false)
     }
   }, [form, isDuplicate])
+
+  // 过五关 brings its own knockout line, so 击飞 must stay unset (the server
+  // rejects the combination).
+  useEffect(() => {
+    if (isPassFiveGates) {
+      form.setFieldValue('forced_end_floor', null)
+    }
+  }, [form, isPassFiveGates])
 
   useEffect(() => {
     const raw = watchedToken.trim()
@@ -275,6 +299,7 @@ function CreateQueueModal({
         initialValues={{
           mode: 'ranked',
           duplicate_token: '',
+          knockout_score: 0,
           primary_timer_seconds: 7,
           secondary_timer_seconds: 4,
           auxiliary_timer_seconds: 12,
@@ -295,11 +320,30 @@ function CreateQueueModal({
               { value: 'ranked', label: '段位模式' },
               { value: 'unranked', label: '休闲模式' },
               { value: 'duplicate', label: '复式' },
+              { value: PASS_FIVE_GATES_MODE, label: MODE_LABELS[PASS_FIVE_GATES_MODE] },
               { value: 'unrecorded', label: '不保留记录' },
               { value: 'singleplayer', label: '单人游戏' },
             ]}
           />
         </Form.Item>
+        {isPassFiveGates && (
+          <Form.Item
+            label="淘汰分线"
+            name="knockout_score"
+            extra="过五关：开局抽定 5 个番种目标（1 易 + 3 中 + 1 难），四人分龙 / 虎两队，先全数完成者获胜；某队总分低于该分线即被淘汰。0 表示不设淘汰。"
+            rules={[
+              { required: true, message: '请输入淘汰分线!' },
+              {
+                validator: (_, value) =>
+                  typeof value === 'number' && Number.isInteger(value) && value >= KNOCKOUT_SCORE_MIN && value <= KNOCKOUT_SCORE_MAX
+                    ? Promise.resolve()
+                    : Promise.reject(new Error(`淘汰分线必须是 ${KNOCKOUT_SCORE_MIN} 到 ${KNOCKOUT_SCORE_MAX} 之间的整数`)),
+              },
+            ]}
+          >
+            <InputNumber min={KNOCKOUT_SCORE_MIN} max={KNOCKOUT_SCORE_MAX} step={100} precision={0} />
+          </Form.Item>
+        )}
         {isDuplicate && (
           <Form.Item
             label="建桌密钥（复式牌墙）"
@@ -420,7 +464,7 @@ function CreateQueueModal({
             <Form.Item label="击飞" name="forced_end_floor">
               <Select
                 style={{ width: 90 }}
-                disabled={isDuplicate}
+                disabled={isDuplicate || isPassFiveGates}
                 options={[
                   { value: null, label: '无' },
                   { value: -1500, label: '-1500 点' },
@@ -1012,8 +1056,9 @@ function LobbyPage() {
     }
 
     const mode = values.mode ?? 'ranked'
-    const modeLocksDebug = mode === 'duplicate' || mode === 'ranked' || mode === 'unranked'
+    const modeLocksDebug = mode === 'duplicate' || mode === 'ranked' || mode === 'unranked' || mode === PASS_FIVE_GATES_MODE
     const isDuplicate = mode === 'duplicate'
+    const isPassFiveGates = mode === PASS_FIVE_GATES_MODE
     const isUnranked = mode !== 'ranked'
     const unrecorded = mode === 'unrecorded' || mode === 'singleplayer'
 
@@ -1028,7 +1073,7 @@ function LobbyPage() {
             secondary_timer_ms: values.secondary_timer_seconds * 1000,
             auxiliary_timer_ms: values.auxiliary_timer_seconds * 1000,
             round_count: values.total_rounds,
-            forced_end_floor: isDuplicate ? null : (values.forced_end_floor ?? null),
+            forced_end_floor: isDuplicate || isPassFiveGates ? null : (values.forced_end_floor ?? null),
             abandon_game: isDuplicate ? false : values.abandon_game,
             recorded: !(unrecorded || (!modeLocksDebug && values.debug_mode)),
             debug_mode: modeLocksDebug ? false : values.debug_mode,
@@ -1036,6 +1081,8 @@ function LobbyPage() {
             public_session: values.public_session,
             duplicate_mode: isDuplicate,
             duplicate_token: isDuplicate ? values.duplicate_token : undefined,
+            mode: isPassFiveGates ? PASS_FIVE_GATES_MODE : undefined,
+            mode_config: isPassFiveGates ? { knockout_score: values.knockout_score ?? 0 } : undefined,
           },
           queue_config: {
             singleplayer: mode === 'singleplayer',
