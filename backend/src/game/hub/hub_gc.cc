@@ -141,6 +141,7 @@ void GameHub::garbage_collect_pending_sessions() {
     }
 
     bool removed_any_session = false;
+    std::vector<std::int64_t> removed_session_ids;
     for (const auto session_id : expired_session_ids) {
         std::unique_lock lock(mutex_);
         auto it = pending_sessions_.find(session_id);
@@ -159,7 +160,15 @@ void GameHub::garbage_collect_pending_sessions() {
             }
         }
         pending_sessions_.erase(it);
+        removed_session_ids.push_back(session_id);
         removed_any_session = true;
+    }
+
+    // Pending sessions that never started still count as live sessions of
+    // their duplicate seed list — release that count now so an expired seed
+    // list can be destroyed.
+    for (const auto session_id : removed_session_ids) {
+        complete_session(session_id);
     }
 
     for (const auto session_id : changed_session_ids) {

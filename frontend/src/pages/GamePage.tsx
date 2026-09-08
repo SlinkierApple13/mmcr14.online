@@ -131,6 +131,7 @@ export default function GamePage() {
   const [spectatorManagement, setSpectatorManagement] = useState<SpectatorManagementEntry[]>([])
   const spectatorManagementPendingIdsRef = useRef<Set<string>>(new Set())
   const [abandonEnabled, setAbandonEnabled] = useState(false)
+  const [duplicateMode, setDuplicateMode] = useState(false)
   const [myAbandoned, setMyAbandoned] = useState(false)
   const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
 
@@ -445,6 +446,7 @@ export default function GamePage() {
             setPhase('pending')
             lastScRef.current = -1
             setAbandonEnabled(snap.summary.abandon_game !== false)
+            setDuplicateMode(snap.summary.duplicate_mode === true)
             setMyAbandoned(false)
             // Capture ratings for pending phase sidebar
             const pRatings = (snap as unknown as Record<string, unknown>)?.ratings
@@ -457,6 +459,7 @@ export default function GamePage() {
             setPhase('active')
             lastScRef.current = snap.state.stage_counter
             setAbandonEnabled(snap.abandon_game !== false)
+            setDuplicateMode(snap.duplicate_mode === true)
             const ownSeat = snap.seats.find(
               (seat) => seat.seat_index === snap.viewer.seat_index,
             )
@@ -908,16 +911,41 @@ export default function GamePage() {
     sendEnvelope(s, 'queue.ready', { session_id: sessionIdHint, ready })
   }
 
+  function chooseSeat(seatIndex: number) {
+    const s = socketRef.current
+    if (!s || s.readyState !== WebSocket.OPEN || !sessionIdHint) return
+    sendEnvelope(s, 'queue.choose_seat', { session_id: sessionIdHint, seat_index: seatIndex })
+  }
+
   // ── Pending phase: show waiting room in scene ────────────────
   useEffect(() => {
     if (phase !== 'pending' || !pendingSnapshot) return
     const own = pendingSnapshot.seats.find(
       (s: { player_id: number | null }) => s.player_id === auth?.player.player_id,
     )
+    const isDuplicatePending = Boolean(pendingSnapshot.summary.duplicate_mode)
+    const members = pendingSnapshot.members ?? []
+    const ownSeat = isDuplicatePending
+      ? (members.find((m) => m.player_id === auth?.player.player_id)?.seat_index ?? null)
+      : null
     sceneRef.current?.showPending(
       pendingSnapshot.seats,
       own?.ready ?? false,
-      () => sendReady(!(own?.ready ?? false)),
+      () => {
+        if (isDuplicatePending && ownSeat === null) {
+          notify('请选择座位')
+          return
+        }
+        sendReady(!(own?.ready ?? false))
+      },
+      isDuplicatePending
+        ? {
+            members,
+            ownPlayerId: auth?.player.player_id ?? null,
+            ownSeat,
+            onChooseSeat: chooseSeat,
+          }
+        : null,
     )
   }, [phase, pendingSnapshot, auth?.player.player_id])
 
@@ -1036,7 +1064,7 @@ export default function GamePage() {
             })}
           </div>
           <div className="game-page__sidebar-bottom-stack">
-            {phase === 'active' && !isSpectator && (
+            {phase === 'active' && !isSpectator && !duplicateMode && (
               <div className="spectator-management-row">
                 {abandonEnabled && (
                   <button

@@ -25,15 +25,19 @@ export interface PendingSessionSummary {
   session_id: number
   occupied_seat_count: number
   ready_seat_count: number
+  member_count?: number
   primary_timer_ms: number
   secondary_timer_ms: number
   auxiliary_timer_ms: number
   round_count: number
   forced_end_floor: number | null
   recorded: boolean
+  unranked?: boolean
+  singleplayer?: boolean
   debug_mode?: boolean
   public_session: boolean
   abandon_game: boolean
+  duplicate_mode?: boolean
   can_join: boolean
   can_start: boolean
   names: string[]
@@ -48,10 +52,13 @@ export interface ActiveSessionSummary {
   forced_end_floor: number | null
   round_counter: number
   recorded: boolean
+  unranked?: boolean
+  singleplayer?: boolean
   debug_mode?: boolean
   ended?: boolean
   public_session: boolean
   abandon_game: boolean
+  duplicate_mode?: boolean
   names: string[]
 }
 
@@ -62,10 +69,17 @@ export interface PendingSeatSnapshot {
   username: string | null
 }
 
+export interface PendingMemberSnapshot {
+  player_id: number
+  username: string
+  seat_index: number
+}
+
 export interface PendingSnapshot {
   phase: 'pending'
   summary: PendingSessionSummary
   seats: PendingSeatSnapshot[]
+  members?: PendingMemberSnapshot[]
 }
 
 // ── Active game ─────────────────────────────────────────────────────
@@ -137,6 +151,7 @@ export interface ActiveSessionSnapshot {
   spectator?: boolean
   reveal_all_hands?: boolean
   abandon_game?: boolean
+  duplicate_mode?: boolean
   hand_access?: {
     granted: boolean
     target_player_id?: number
@@ -218,33 +233,6 @@ export interface ReplayInfo {
   player_names: string[]
 }
 
-export interface ReplayListPayload {
-  replays: ReplayInfo[]
-}
-
-export interface ReplayListQueryPayload {
-  page?: number
-  page_size?: number
-  session_query?: string
-  player_query?: string
-  exact_session_match?: boolean
-  started_after_ms?: number
-  started_before_ms?: number
-}
-
-export interface ReplayListPagePayload {
-  replays: ReplayInfo[]
-  total_count: number
-  page: number
-  page_size: number
-  page_count: number
-  unique_player_count: number
-  latest_timestamp_ms: number | null
-  session_query?: string
-  player_query?: string
-  exact_session_match: boolean
-}
-
 export interface ReplayGameConfig {
   primary_timer_ms: number
   secondary_timer_ms: number
@@ -267,6 +255,8 @@ export interface ReplayRoundStartSnapshot {
   wall_tiles?: number[]
   wall_front_index?: number
   wall_back_index?: number
+  duplicate_mode?: boolean
+  wall_front_indices?: number[]
 }
 
 export interface ReplayInitialSeat {

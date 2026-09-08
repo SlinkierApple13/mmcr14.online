@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace mmcr::game {
 
@@ -34,8 +37,15 @@ struct GameConfig {
     bool recorded{true};
     bool debug_mode{false};
     bool unranked{false};
+    bool singleplayer{false};
     bool public_session{true};
     bool abandon_game{true};
+    bool duplicate_mode{false};
+    std::optional<std::string> duplicate_token{std::nullopt};
+    // Runtime state populated by the hub when a duplicate session starts:
+    // the shared seed list and this session's number within it.
+    std::vector<std::uint64_t> duplicate_seeds;
+    std::int64_t duplicate_session_number{-1};
     std::optional<int> forced_end_floor{std::nullopt};
 
     static constexpr int with_margin(int base) {

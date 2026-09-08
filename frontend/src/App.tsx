@@ -5,7 +5,6 @@ import zhCN from 'antd/locale/zh_CN'
 import LobbyPage from './pages/LobbyPage'
 import GamePage from './pages/GamePage'
 import CalculatorPage from './pages/CalculatorPage'
-import ReplayListPage from './pages/ReplayListPage'
 import ReplayPage from './pages/ReplayPage'
 import StatsPage from './pages/StatsPage'
 
@@ -40,7 +39,6 @@ function App() {
             <Route path="/game" element={<GamePage />} />
             <Route path="/game/:sessionId" element={<GamePage />} />
             <Route path="/replay" element={<ReplayPage />} />
-            <Route path="/replays" element={<ReplayListPage />} />
             <Route
               path="/stats"
               element={<StatsPage />}

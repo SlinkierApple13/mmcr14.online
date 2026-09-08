@@ -27,6 +27,10 @@ namespace mmcr::storage {
 class GameRecordManager;
 }
 
+namespace mmcr::duplicate {
+class DuplicateManager;
+}
+
 namespace mmcr::game {
 
 class ActiveSession;
@@ -89,9 +93,12 @@ struct ActiveSessionSummary {
     std::uint64_t round_counter{0};
     bool recorded{true};
     bool debug_mode{false};
+    bool unranked{false};
+    bool singleplayer{false};
     bool ended{false};
     bool public_session{true};
     bool abandon_game{true};
+    bool duplicate_mode{false};
     std::vector<std::string> names;
 };
 
@@ -99,7 +106,8 @@ class GameHub {
 public:
     GameHub(random::SeedContainer* seed_container,
             GameTransport* transport,
-            storage::GameRecordManager* record_manager = nullptr);
+            storage::GameRecordManager* record_manager = nullptr,
+            duplicate::DuplicateManager* duplicate_manager = nullptr);
     ~GameHub();
 
     [[nodiscard]] auto create_session(const CreateGameSessionRequest& request)
@@ -128,6 +136,9 @@ public:
     void broadcast_to_players(const std::vector<std::int64_t>& player_ids,
                               const Json::Value& message,
                               int delay_ms = 0);
+    // Called exactly once when a session (ranked or duplicate) completes:
+    // decrements the duplicate seed list live-session count when applicable.
+    void complete_session(std::int64_t session_id);
 
     [[nodiscard]] auto transport() -> GameTransport* { return transport_; }
 
@@ -147,7 +158,11 @@ private:
     random::SeedContainer* seed_container_{nullptr};
     GameTransport* transport_{nullptr};
     storage::GameRecordManager* record_manager_{nullptr};
+    duplicate::DuplicateManager* duplicate_manager_{nullptr};
     mutable std::shared_mutex mutex_;
+    std::mutex duplicate_tokens_mutex_;
+    std::unordered_map<std::int64_t, std::string> duplicate_session_tokens_;
+    std::unordered_set<std::int64_t> duplicate_started_sessions_;
     std::mt19937_64 session_id_rng_;
     std::unordered_map<std::int64_t, std::shared_ptr<auth::PlayerProfile>> known_players_;
     std::unordered_map<std::int64_t, std::unique_ptr<PendingSession>> pending_sessions_;

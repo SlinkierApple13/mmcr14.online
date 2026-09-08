@@ -8,6 +8,11 @@
 namespace mmcr::game {
 
 auto PendingSession::is_empty_locked() const -> bool {
+    if (game_config_.duplicate_mode) {
+        return members_.empty() && std::none_of(seats_.begin(), seats_.end(), [](const PendingSeat& seat) {
+            return seat.player.valid();
+        });
+    }
     return std::none_of(seats_.begin(), seats_.end(), [](const PendingSeat& seat) {
         return seat.player.valid();
     });
@@ -49,6 +54,15 @@ auto PendingSession::collect_invalid_players() -> std::vector<std::int64_t> {
     std::vector<std::int64_t> removed_player_ids;
 
     std::unique_lock lock(mutex_);
+    if (game_config_.duplicate_mode) {
+        members_.erase(std::remove_if(members_.begin(), members_.end(), [&removed_player_ids](const auto& member) {
+            const bool invalid = !member.valid();
+            if (invalid && member.player_id() != 0) {
+                removed_player_ids.push_back(member.player_id());
+            }
+            return invalid;
+        }), members_.end());
+    }
     for (auto& seat : seats_) {
         if (seat.player.valid() || seat.player.player_id() == 0) {
             continue;
@@ -74,29 +88,53 @@ auto PendingSession::join_player(auth::PlayerProfilePtr player) -> util::Status 
 
     {
         std::unique_lock lock(mutex_);
-        for (auto& seat : seats_) {
-            if (seat.player.matches(player.player_id())) {
-                seat.player = player;
-                seat.ready = false;
-                empty_timeout_elapsed_ = false;
-                break;
-            }
-        }
-
-        auto existing_it = std::find_if(seats_.begin(), seats_.end(), [&player](const PendingSeat& seat) {
-            return seat.player.matches(player.player_id());
-        });
-        if (existing_it == seats_.end()) {
-            auto seat_it = std::find_if(seats_.begin(), seats_.end(), [](const PendingSeat& seat) {
-                return !seat.player.valid();
+        if (game_config_.duplicate_mode) {
+            auto member_it = std::find_if(members_.begin(), members_.end(), [&player](const auto& member) {
+                return member.matches(player.player_id());
             });
-            if (seat_it == seats_.end()) {
-                return util::Status::InvalidArgument("session is full");
+            if (member_it != members_.end()) {
+                *member_it = player;
+                // Refresh the profile on the chosen seat, if any.
+                for (auto& seat : seats_) {
+                    if (seat.player.matches(player.player_id())) {
+                        seat.player = player;
+                        seat.ready = false;
+                        break;
+                    }
+                }
+                empty_timeout_elapsed_ = false;
+            } else {
+                if (members_.size() >= seats_.size()) {
+                    return util::Status::InvalidArgument("session is full");
+                }
+                members_.push_back(player);
+                empty_timeout_elapsed_ = false;
+            }
+        } else {
+            for (auto& seat : seats_) {
+                if (seat.player.matches(player.player_id())) {
+                    seat.player = player;
+                    seat.ready = false;
+                    empty_timeout_elapsed_ = false;
+                    break;
+                }
             }
 
-            seat_it->player = player;
-            seat_it->ready = false;
-            empty_timeout_elapsed_ = false;
+            auto existing_it = std::find_if(seats_.begin(), seats_.end(), [&player](const PendingSeat& seat) {
+                return seat.player.matches(player.player_id());
+            });
+            if (existing_it == seats_.end()) {
+                auto seat_it = std::find_if(seats_.begin(), seats_.end(), [](const PendingSeat& seat) {
+                    return !seat.player.valid();
+                });
+                if (seat_it == seats_.end()) {
+                    return util::Status::InvalidArgument("session is full");
+                }
+
+                seat_it->player = player;
+                seat_it->ready = false;
+                empty_timeout_elapsed_ = false;
+            }
         }
     }
 
@@ -104,8 +142,75 @@ auto PendingSession::join_player(auth::PlayerProfilePtr player) -> util::Status 
     return util::Status::Ok();
 }
 
+auto PendingSession::is_member(std::int64_t player_id) const -> bool {
+    std::shared_lock lock(mutex_);
+    return std::any_of(members_.begin(), members_.end(), [player_id](const auto& member) {
+        return member.matches(player_id);
+    });
+}
+
+auto PendingSession::chosen_seat_of(std::int64_t player_id) const -> std::optional<int> {
+    std::shared_lock lock(mutex_);
+    for (const auto& seat : seats_) {
+        if (seat.player.matches(player_id)) {
+            return seat.seat_index;
+        }
+    }
+    return std::nullopt;
+}
+
+auto PendingSession::choose_seat(std::int64_t player_id, int seat_index) -> util::Status {
+    if (!game_config_.duplicate_mode) {
+        return util::Status::InvalidArgument("seat selection requires duplicate mode");
+    }
+    if (seat_index < 0 || seat_index >= static_cast<int>(seats_.size())) {
+        return util::Status::InvalidArgument("invalid seat index");
+    }
+
+    std::unique_lock lock(mutex_);
+    const auto member_it = std::find_if(members_.begin(), members_.end(), [player_id](const auto& member) {
+        return member.matches(player_id);
+    });
+    if (member_it == members_.end()) {
+        return util::Status::NotFound("player is not in the pending session");
+    }
+
+    auto& target = seats_[seat_index];
+    if (target.player.matches(player_id)) {
+        // Un-choose: release the seat and clear readiness.
+        target.player.reset();
+        target.ready = false;
+        return util::Status::Ok();
+    }
+    if (target.player.valid()) {
+        return util::Status::InvalidArgument("该座位已被占用");
+    }
+    // Selecting another seat moves the player there directly.
+    for (auto& seat : seats_) {
+        if (seat.player.matches(player_id)) {
+            seat.player.reset();
+            seat.ready = false;
+            break;
+        }
+    }
+
+    target.player = *member_it;
+    target.ready = false;
+    return util::Status::Ok();
+}
+
 auto PendingSession::player_leaves(std::int64_t player_id) -> util::Status {
     std::unique_lock lock(mutex_);
+    if (game_config_.duplicate_mode) {
+        const auto member_it = std::find_if(members_.begin(), members_.end(), [player_id](const auto& member) {
+            return member.matches(player_id);
+        });
+        if (member_it != members_.end()) {
+            members_.erase(member_it);
+        } else {
+            return util::Status::NotFound("player is not in pending session");
+        }
+    }
     for (auto& seat : seats_) {
         if (!seat.player.matches(player_id)) {
             continue;
@@ -116,11 +221,39 @@ auto PendingSession::player_leaves(std::int64_t player_id) -> util::Status {
         return util::Status::Ok();
     }
 
+    if (game_config_.duplicate_mode) {
+        return util::Status::Ok();
+    }
     return util::Status::NotFound("player is not in pending session");
 }
 
 auto PendingSession::player_ready(std::int64_t player_id, bool ready) -> util::Status {
     std::unique_lock lock(mutex_);
+    if (game_config_.duplicate_mode) {
+        const auto member_it = std::find_if(members_.begin(), members_.end(), [player_id](const auto& member) {
+            return member.matches(player_id);
+        });
+        if (member_it == members_.end()) {
+            return util::Status::NotFound("player is not in pending session");
+        }
+        if (ready) {
+            auto seat_it = std::find_if(seats_.begin(), seats_.end(), [player_id](const PendingSeat& seat) {
+                return seat.player.matches(player_id);
+            });
+            if (seat_it == seats_.end()) {
+                return util::Status::InvalidArgument("请选择座位");
+            }
+            seat_it->ready = true;
+        } else {
+            for (auto& seat : seats_) {
+                if (seat.player.matches(player_id)) {
+                    seat.ready = false;
+                    break;
+                }
+            }
+        }
+        return util::Status::Ok();
+    }
     for (auto& seat : seats_) {
         if (!seat.player.matches(player_id)) {
             continue;

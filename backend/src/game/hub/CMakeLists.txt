@@ -14,6 +14,7 @@ target_include_directories(mmcr_game_hub
 
 target_link_libraries(mmcr_game_hub
     PUBLIC
+        mmcr::duplicate
         mmcr::game_engine
         mmcr::random
         mmcr::util

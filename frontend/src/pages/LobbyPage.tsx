@@ -64,17 +64,18 @@ const TOTAL_ROUNDS_MAX = 32
 
 type LobbySessionRow = PendingSessionSummary
 
+type SessionMode = 'duplicate' | 'ranked' | 'unranked' | 'unrecorded' | 'singleplayer'
+
 interface CreateQueueValues {
+  mode: SessionMode
+  duplicate_token?: string
   primary_timer_seconds: number
   secondary_timer_seconds: number
   auxiliary_timer_seconds: number
   total_rounds: number
   forced_end_floor: number | null
-  recorded: boolean
   abandon_game: boolean
-  singleplayer: boolean
   debug_mode: boolean
-  unranked: boolean
   public_session: boolean
 }
 
@@ -117,6 +118,21 @@ function formatEarlyEnd(forcedEndFloor: number | null, abandonGame: boolean): st
   return parts.length > 0 ? parts.join(' / ') : '无'
 }
 
+function formatSessionMode(record: {
+  debug_mode?: boolean
+  duplicate_mode?: boolean
+  singleplayer?: boolean
+  recorded: boolean
+  unranked?: boolean
+}): string {
+  if (record.debug_mode) return '调试模式'
+  if (record.duplicate_mode) return '复式'
+  if (record.singleplayer) return '单人游戏'
+  if (!record.recorded) return '不保留记录'
+  if (record.unranked) return '休闲模式'
+  return '段位模式'
+}
+
 function formatRoundReadable(roundCounter: number): string {
   const roundIndex = Math.max(0, roundCounter - 1)
   return `${ROUND_WINDS[Math.floor(roundIndex / 4) % ROUND_WINDS.length]}${(roundIndex % 4) + 1 + 4 * Math.floor(roundIndex / 16)}`
@@ -149,29 +165,78 @@ function CreateQueueModal({
   open,
   loading,
   form,
+  token,
   onCancel,
   onSubmit,
 }: {
   open: boolean
   loading: boolean
   form: ReturnType<typeof Form.useForm<CreateQueueValues>>[0]
+  token: string | null
   onCancel: () => void
   onSubmit: (values: CreateQueueValues) => void
 }) {
   const primaryTimerSeconds = Form.useWatch('primary_timer_seconds', form)
-  const singleplayer = Form.useWatch('singleplayer', form) ?? false
+  const watchedMode = (Form.useWatch('mode', form) ?? 'ranked') as SessionMode
+  const watchedToken = Form.useWatch('duplicate_token', form) ?? ''
   const debugMode = Form.useWatch('debug_mode', form) ?? false
-  // const unranked = Form.useWatch('unranked', form) ?? false
-  const recorded = Form.useWatch('recorded', form) ?? true
+  const modeLocksDebug = watchedMode === 'duplicate' || watchedMode === 'ranked' || watchedMode === 'unranked'
+  const isDuplicate = watchedMode === 'duplicate'
+  const [tokenInfo, setTokenInfo] = useState<{ round_count: number; expires_at_ms: number; expired: boolean } | null>(null)
+  const [tokenError, setTokenError] = useState('')
+  const [tokenChecking, setTokenChecking] = useState(false)
 
   useEffect(() => {
-    if (singleplayer || debugMode) {
-      form.setFieldValue('recorded', false)
+    if (modeLocksDebug && debugMode) {
+      form.setFieldValue('debug_mode', false)
     }
-    if (!recorded || singleplayer || debugMode) {
-      form.setFieldValue('unranked', true)
+  }, [form, modeLocksDebug, debugMode])
+
+  useEffect(() => {
+    if (isDuplicate) {
+      form.setFieldValue('abandon_game', false)
     }
-  }, [form, singleplayer, debugMode, recorded])
+  }, [form, isDuplicate])
+
+  useEffect(() => {
+    const raw = watchedToken.trim()
+    if (!isDuplicate || raw.length === 0) {
+      setTokenInfo(null)
+      setTokenError('')
+      setTokenChecking(false)
+      return
+    }
+    let cancelled = false
+    setTokenChecking(true)
+    setTokenError('')
+    apiRequest<{ round_count: number; expires_at_ms: number; expired: boolean }>('/duplicate/query', {
+      method: 'POST',
+      token,
+      body: { token: raw },
+    })
+      .then((info) => {
+        if (cancelled) return
+        setTokenInfo(info)
+        if (info.expired) {
+          setTokenError('该令牌已过期')
+        } else {
+          form.setFieldValue('total_rounds', info.round_count)
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setTokenInfo(null)
+        setTokenError(describeError(error, '令牌无效或已过期'))
+      })
+      .finally(() => {
+        if (!cancelled) setTokenChecking(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [form, isDuplicate, watchedToken, token])
+
+  const duplicateInvalid = isDuplicate && (tokenError.length > 0 || tokenInfo === null || tokenInfo.expired)
 
   const validateWholeSecondsInRange = useCallback(
     (value: number | null | undefined, min: number, max: number, label: string): Promise<void> => {
@@ -198,7 +263,7 @@ function CreateQueueModal({
         <Button key="cancel" onClick={onCancel}>
           取消
         </Button>,
-        <Button key="submit" type="primary" loading={loading} onClick={() => form.submit()}>
+        <Button key="submit" type="primary" loading={loading} disabled={duplicateInvalid || tokenChecking} onClick={() => form.submit()}>
           创建
         </Button>,
       ]}
@@ -208,19 +273,53 @@ function CreateQueueModal({
         layout="vertical"
         onFinish={onSubmit}
         initialValues={{
+          mode: 'ranked',
+          duplicate_token: '',
           primary_timer_seconds: 7,
           secondary_timer_seconds: 4,
           auxiliary_timer_seconds: 12,
           total_rounds: 16,
           forced_end_floor: null,
-          recorded: true,
           abandon_game: true,
-          singleplayer: false,
           debug_mode: false,
-          unranked: false,
           public_session: true,
         }}
       >
+        <Form.Item
+          label="模式"
+          name="mode"
+          rules={[{ required: true, message: '请选择模式!' }]}
+        >
+          <Select
+            options={[
+              { value: 'ranked', label: '段位模式' },
+              { value: 'unranked', label: '休闲模式' },
+              { value: 'duplicate', label: '复式' },
+              { value: 'unrecorded', label: '不保留记录' },
+              { value: 'singleplayer', label: '单人游戏' },
+            ]}
+          />
+        </Form.Item>
+        {isDuplicate && (
+          <Form.Item
+            label="建桌密钥（复式牌墙）"
+            name="duplicate_token"
+            rules={[
+              { required: true, message: '请输入建桌密钥!' },
+              {
+                validator: async () => {
+                  if (tokenError) {
+                    throw new Error(tokenError)
+                  }
+                },
+              },
+            ]}
+            validateStatus={tokenError ? 'error' : tokenChecking ? 'validating' : tokenInfo && !tokenInfo.expired ? 'success' : undefined}
+            help={tokenError || (tokenInfo && !tokenInfo.expired ? `牌墙小局数 ${tokenInfo.round_count}，到期时间 ${new Date(tokenInfo.expires_at_ms).toLocaleString()}` : undefined)}
+          >
+            <Input placeholder="请输入建桌密钥" autoComplete="off" />
+          </Form.Item>
+        )}
         <Row gutter={16}>
           <Col span={12}>
             <Form.Item
@@ -312,7 +411,7 @@ function CreateQueueModal({
                 },
               ]}
             >
-              <InputNumber min={TOTAL_ROUNDS_MIN} max={TOTAL_ROUNDS_MAX} step={1} precision={0} />
+              <InputNumber min={TOTAL_ROUNDS_MIN} max={TOTAL_ROUNDS_MAX} step={1} precision={0} disabled={isDuplicate} />
             </Form.Item>
           </Col>
         </Row>
@@ -321,6 +420,7 @@ function CreateQueueModal({
             <Form.Item label="击飞" name="forced_end_floor">
               <Select
                 style={{ width: 90 }}
+                disabled={isDuplicate}
                 options={[
                   { value: null, label: '无' },
                   { value: -1500, label: '-1500 点' },
@@ -331,7 +431,7 @@ function CreateQueueModal({
           </Col>
           <Col span={12}>
             <Form.Item label="中途放弃" name="abandon_game" valuePropName="checked">
-              <Switch />
+              <Switch disabled={isDuplicate} />
             </Form.Item>
           </Col>
         </Row>
@@ -341,32 +441,292 @@ function CreateQueueModal({
               <Switch />
             </Form.Item>
           </Col>
-        </Row>
-        <Row gutter={16}>
-          <Col span={12}>
-            <Form.Item label="保留记录" name="recorded" valuePropName="checked">
-              <Switch disabled={singleplayer || debugMode} />
-            </Form.Item>
-          </Col>
-          <Col span={12}>
-            <Form.Item label="休闲模式" name="unranked" valuePropName="checked">
-              <Switch disabled={singleplayer || debugMode || !recorded} />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Row gutter={16}>
-          <Col span={12}>
-            <Form.Item label="单人游戏" name="singleplayer" valuePropName="checked">
-              <Switch />
-            </Form.Item>
-          </Col>
           <Col span={12}>
             <Form.Item label="调试模式" name="debug_mode" valuePropName="checked">
-              <Switch />
+              <Switch disabled={modeLocksDebug} />
             </Form.Item>
           </Col>
         </Row>
       </Form>
+    </Modal>
+  )
+}
+
+const DUPLICATE_EXPIRY_OPTIONS = [
+  { value: 3, label: '3 小时' },
+  { value: 6, label: '6 小时' },
+  { value: 12, label: '12 小时' },
+  { value: 24, label: '24 小时' },
+  { value: 72, label: '72 小时' },
+  { value: 168, label: '168 小时' },
+]
+
+interface DuplicateTokenResult {
+  creation_token?: string
+  master_token?: string
+  round_count?: number
+  expires_at_ms?: number
+  expired?: boolean
+  next_session_number?: number
+  live_session_count?: number
+  started_session_count?: number
+}
+
+function CopyableToken({ label, value }: { label: string; value: string }) {
+  return (
+    <Space>
+      <Text type="secondary">{label}</Text>
+      <Text code copyable={{ text: value }}>{value}</Text>
+    </Space>
+  )
+}
+
+function DuplicateTokenModal({
+  open,
+  token,
+  onCancel,
+}: {
+  open: boolean
+  token: string | null
+  onCancel: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [rounds, setRounds] = useState(16)
+  const [expiryHours, setExpiryHours] = useState(72)
+  const [created, setCreated] = useState<DuplicateTokenResult | null>(null)
+  const [queryToken, setQueryToken] = useState('')
+  const [queryResult, setQueryResult] = useState<DuplicateTokenResult | null>(null)
+  const [extendToken, setExtendToken] = useState('')
+  const [extendHours, setExtendHours] = useState(72)
+  const [extendResult, setExtendResult] = useState<DuplicateTokenResult | null>(null)
+  const [expireToken, setExpireToken] = useState('')
+  const [confirmExpire, setConfirmExpire] = useState(false)
+
+  // Reopening the modal starts from a clean default state.
+  useEffect(() => {
+    if (!open) return
+    setBusy(false)
+    setRounds(16)
+    setExpiryHours(72)
+    setCreated(null)
+    setQueryToken('')
+    setQueryResult(null)
+    setExtendToken('')
+    setExtendHours(72)
+    setExtendResult(null)
+    setExpireToken('')
+    setConfirmExpire(false)
+  }, [open])
+
+  const withAuth = (action: () => void) => {
+    if (!token) {
+      notification.error({ message: '请先登录', placement: 'topRight' })
+      return
+    }
+    action()
+  }
+
+  const handleGenerate = async () => {
+    await withAuth(async () => {
+      setBusy(true)
+      try {
+        const result = await apiRequest<DuplicateTokenResult>('/duplicate/create', {
+          method: 'POST',
+          token,
+          body: { round_count: rounds, expiry_hours: expiryHours },
+        })
+        setCreated(result)
+        notification.success({ message: '牌墙已生成', placement: 'topRight' })
+      } catch (error) {
+        notification.error({
+          message: '生成失败',
+          description: describeError(error, '生成牌墙失败'),
+          placement: 'topRight',
+        })
+      } finally {
+        setBusy(false)
+      }
+    })
+  }
+
+  const handleQuery = async () => {
+    await withAuth(async () => {
+      setBusy(true)
+      try {
+        const result = await apiRequest<DuplicateTokenResult>('/duplicate/query', {
+          method: 'POST',
+          token,
+          body: { token: queryToken.trim() },
+        })
+        setQueryResult(result)
+      } catch (error) {
+        setQueryResult(null)
+        notification.error({
+          message: '查询失败',
+          description: describeError(error, '查询失败'),
+          placement: 'topRight',
+        })
+      } finally {
+        setBusy(false)
+      }
+    })
+  }
+
+  const handleExtend = async () => {
+    await withAuth(async () => {
+      setBusy(true)
+      try {
+        const result = await apiRequest<DuplicateTokenResult>('/duplicate/extend', {
+          method: 'POST',
+          token,
+          body: { master_token: extendToken.trim(), expiry_hours: extendHours },
+        })
+        setExtendResult(result)
+        notification.success({ message: '已延长有效期', placement: 'topRight' })
+      } catch (error) {
+        notification.error({
+          message: '延长失败',
+          description: describeError(error, '延长有效期失败'),
+          placement: 'topRight',
+        })
+      } finally {
+        setBusy(false)
+      }
+    })
+  }
+
+  const handleExpireClick = () => {
+    if (!token) {
+      notification.error({ message: '请先登录', placement: 'topRight' })
+      return
+    }
+    setConfirmExpire(true)
+  }
+
+  const performExpire = async () => {
+    setBusy(true)
+    try {
+      await apiRequest('/duplicate/expire', {
+        method: 'POST',
+        token,
+        body: { master_token: expireToken.trim() },
+      })
+      setConfirmExpire(false)
+      setExtendResult(null)
+      setQueryResult(null)
+      notification.success({ message: '牌墙已强制过期', placement: 'topRight' })
+    } catch (error) {
+      notification.error({
+        message: '操作失败',
+        description: describeError(error, '强制过期失败'),
+        placement: 'topRight',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="复式牌墙管理"
+      open={open}
+      onCancel={onCancel}
+      footer={null}
+      width={560}
+    >
+      <Divider orientation="left" plain style={{ marginTop: 0 }}>生成牌墙</Divider>
+      <Space wrap>
+        <Text>小局数</Text>
+        <InputNumber min={1} max={32} precision={0} value={rounds} onChange={(value) => setRounds(value ?? 16)} />
+        <Text>自动过期时间</Text>
+        <Select
+          style={{ width: 120 }}
+          value={expiryHours}
+          onChange={(value) => setExpiryHours(value)}
+          options={DUPLICATE_EXPIRY_OPTIONS}
+        />
+        <Button type="primary" loading={busy} onClick={() => void handleGenerate()}>生成</Button>
+      </Space>
+      {created && (
+        <div style={{ marginTop: 12 }}>
+          <CopyableToken label="建桌密钥" value={created.creation_token ?? ''} />
+          <br />
+          <CopyableToken label="主控密钥" value={created.master_token ?? ''} />
+          <br />
+          <Text type="secondary">
+            支持 {created.round_count} 局复式对局，到期时间{' '}
+            {created.expires_at_ms ? new Date(created.expires_at_ms).toLocaleString() : '-'}
+          </Text>
+        </div>
+      )}
+
+      <Divider orientation="left" plain>查询到期时间</Divider>
+      <Space wrap>
+        <Input
+          style={{ width: 300 }}
+          placeholder="建桌密钥或主控密钥"
+          value={queryToken}
+          onChange={(event) => setQueryToken(event.target.value)}
+          autoComplete="off"
+        />
+        <Button loading={busy} onClick={() => void handleQuery()}>查询</Button>
+      </Space>
+      {queryResult && (
+        <div style={{ marginTop: 12 }}>
+          <Text>
+            小局数 {queryResult.round_count}，到期时间{' '}
+            {queryResult.expires_at_ms ? new Date(queryResult.expires_at_ms).toLocaleString() : '-'}
+            {queryResult.expired ? '（已过期）' : ''}
+            ，进行中牌桌（含等待）{queryResult.live_session_count ?? 0}
+            ，已开始对局 {queryResult.started_session_count ?? 0}
+            ，累计开局 {queryResult.next_session_number ?? 0}
+          </Text>
+        </div>
+      )}
+
+      <Divider orientation="left" plain>延长有效期（主控密钥）</Divider>
+      <Space wrap>
+        <Input
+          style={{ width: 300 }}
+          placeholder="主控密钥"
+          value={extendToken}
+          onChange={(event) => setExtendToken(event.target.value)}
+          autoComplete="off"
+        />
+        <Select
+          style={{ width: 90 }}
+          value={extendHours}
+          onChange={(value) => setExtendHours(value)}
+          options={DUPLICATE_EXPIRY_OPTIONS}
+        />
+        <Button loading={busy} onClick={() => void handleExtend()}>延长</Button>
+      </Space>
+      {extendResult && (
+        <div style={{ marginTop: 12 }}>
+          <Text>新的到期时间 {new Date(extendResult.expires_at_ms ?? 0).toLocaleString()}</Text>
+        </div>
+      )}
+
+      <Divider orientation="left" plain>强制过期（主控密钥）</Divider>
+      <Space wrap>
+        <Input
+          style={{ width: 300 }}
+          placeholder="主控密钥"
+          value={expireToken}
+          onChange={(event) => setExpireToken(event.target.value)}
+          autoComplete="off"
+        />
+        <Button danger loading={busy} onClick={handleExpireClick}>强制过期</Button>
+      </Space>
+      {confirmExpire && (
+        <div style={{ marginTop: 12 }}>
+          <Space wrap>
+            <Text type="danger">确认强制过期该牌墙？过期后无法再创建新对局，也无法再次延长。</Text>
+            <Button danger loading={busy} onClick={() => void performExpire()}>确认过期</Button>
+            <Button disabled={busy} onClick={() => setConfirmExpire(false)}>取消</Button>
+          </Space>
+        </div>
+      )}
     </Modal>
   )
 }
@@ -380,6 +740,7 @@ function LobbyPage() {
   const [isRegister, setIsRegister] = useState(false)
   const [isLoginModalVisible, setIsLoginModalVisible] = useState(false)
   const [isCreateQueueModalVisible, setIsCreateQueueModalVisible] = useState(false)
+  const [isDuplicateModalVisible, setIsDuplicateModalVisible] = useState(false)
   const [queues, setQueues] = useState<LobbySessionRow[]>([])
   const [games, setGames] = useState<ActiveSessionSummary[]>([])
   const wsRef = useRef<WebSocket | null>(null)
@@ -642,6 +1003,12 @@ function LobbyPage() {
       return
     }
 
+    const mode = values.mode ?? 'ranked'
+    const modeLocksDebug = mode === 'duplicate' || mode === 'ranked' || mode === 'unranked'
+    const isDuplicate = mode === 'duplicate'
+    const isUnranked = mode !== 'ranked'
+    const unrecorded = mode === 'unrecorded' || mode === 'singleplayer'
+
     setLoading(true)
     try {
       const payload = await apiRequest<SessionSnapshotPayload>('/lobby/sessions', {
@@ -653,15 +1020,17 @@ function LobbyPage() {
             secondary_timer_ms: values.secondary_timer_seconds * 1000,
             auxiliary_timer_ms: values.auxiliary_timer_seconds * 1000,
             round_count: values.total_rounds,
-            forced_end_floor: values.forced_end_floor ?? null,
-            recorded: values.singleplayer || values.debug_mode ? false : values.recorded,
-            abandon_game: values.abandon_game,
-            debug_mode: values.debug_mode,
-            unranked: values.unranked,
+            forced_end_floor: isDuplicate ? null : (values.forced_end_floor ?? null),
+            abandon_game: isDuplicate ? false : values.abandon_game,
+            recorded: !(unrecorded || (!modeLocksDebug && values.debug_mode)),
+            debug_mode: modeLocksDebug ? false : values.debug_mode,
+            unranked: isUnranked,
             public_session: values.public_session,
+            duplicate_mode: isDuplicate,
+            duplicate_token: isDuplicate ? values.duplicate_token : undefined,
           },
           queue_config: {
-            singleplayer: values.singleplayer,
+            singleplayer: mode === 'singleplayer',
           },
         },
       })
@@ -750,11 +1119,9 @@ function LobbyPage() {
       render: (_, record) => formatEarlyEnd(record.forced_end_floor, record.abandon_game),
     },
     {
-      title: '保留记录',
-      dataIndex: 'recorded',
-      key: 'recorded',
-      render: (_recorded: boolean, record: LobbySessionRow) =>
-        record.debug_mode ? '调试模式' : (_recorded ? '是' : '否'),
+      title: '模式',
+      key: 'mode',
+      render: (_, record) => formatSessionMode(record),
     },
     {
       title: '等待玩家',
@@ -809,11 +1176,9 @@ function LobbyPage() {
       render: (_, record) => formatEarlyEnd(record.forced_end_floor, record.abandon_game),
     },
     {
-      title: '保留记录',
-      dataIndex: 'recorded',
-      key: 'recorded',
-      render: (_recorded: boolean, record: ActiveSessionSummary) =>
-        record.debug_mode ? '调试模式' : (_recorded ? '是' : '否'),
+      title: '模式',
+      key: 'mode',
+      render: (_, record) => formatSessionMode(record),
     },
     {
       title: '玩家',
@@ -829,6 +1194,13 @@ function LobbyPage() {
           return (
             <Button type="default" onClick={() => navigate(`/game?gameId=${record.session_id}`)}>
               返回
+            </Button>
+          )
+        }
+        if (record.duplicate_mode) {
+          return (
+            <Button type="primary" disabled title="复式对局不接受观战">
+              不可观战
             </Button>
           )
         }
@@ -994,20 +1366,39 @@ function LobbyPage() {
                       <span>等待中</span>
                       {fetchingTables && <LoadingOutlined style={{ marginLeft: 8 }} />}
                     </Space>
-                    <Button
-                      type="primary"
-                      size="small"
-                      onClick={() => {
-                        if (!loggedIn) {
-                          setIsLoginModalVisible(true)
-                          return
-                        }
-                        setIsCreateQueueModalVisible(true)
-                      }}
-                      icon={<PlusCircleOutlined />}
-                    >
-                      创建牌桌
-                    </Button>
+                    <Space>
+                      <Button
+                        size="small"
+                        style={{
+                          borderColor: '#1677ff',
+                          color: '#1677ff',
+                          background: '#ffffff',
+                        }}
+                        onClick={() => {
+                          if (!loggedIn) {
+                            setIsLoginModalVisible(true)
+                            return
+                          }
+                          setIsDuplicateModalVisible(true)
+                        }}
+                      >
+                        复式牌墙管理
+                      </Button>
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={() => {
+                          if (!loggedIn) {
+                            setIsLoginModalVisible(true)
+                            return
+                          }
+                          setIsCreateQueueModalVisible(true)
+                        }}
+                        icon={<PlusCircleOutlined />}
+                      >
+                        创建牌桌
+                      </Button>
+                    </Space>
                   </div>
                 }
                 style={{ height: '100%', borderRadius: '12px', borderColor: 'rgba(0, 0, 0, 0.06)', boxShadow: '0 14px 32px rgba(0, 0, 0, 0.06)' }}
@@ -1114,6 +1505,7 @@ function LobbyPage() {
         open={isCreateQueueModalVisible}
         loading={loading}
         form={createQueueForm}
+        token={token}
         onCancel={() => {
           createQueueForm.resetFields()
           setIsCreateQueueModalVisible(false)
@@ -1121,6 +1513,12 @@ function LobbyPage() {
         onSubmit={(values) => {
           void handleCreateQueue(values)
         }}
+      />
+
+      <DuplicateTokenModal
+        open={isDuplicateModalVisible}
+        token={token}
+        onCancel={() => setIsDuplicateModalVisible(false)}
       />
 
       <Footer

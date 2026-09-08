@@ -63,6 +63,7 @@ Json::Value SerializeRecordGameConfig(const GameConfig& config) {
     payload["recorded"] = config.recorded;
     payload["debug_mode"] = config.debug_mode;
     payload["public_session"] = config.public_session;
+    payload["duplicate_mode"] = config.duplicate_mode;
     return payload;
 }
 
@@ -366,6 +367,10 @@ void ActiveSession::enqueue_current_round_record() {
     header["session_identifier"] = identity_.identifier;
     header["round_number"] = Json::UInt64(recording_.number);
     header["game_config"] = SerializeRecordGameConfig(config_);
+    if (config_.duplicate_mode && config_.duplicate_token.has_value()) {
+        header["duplicate_token"] = *config_.duplicate_token;
+        header["duplicate_session_number"] = Json::Int64(config_.duplicate_session_number);
+    }
     payload["header"] = std::move(header);
     payload["round_start_snapshot"] =
         SerializeRecordRoundStartSnapshot(*recording_.start_snapshot);

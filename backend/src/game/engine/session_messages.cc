@@ -624,11 +624,12 @@ auto ActiveSession::build_snapshot_for_player(
     payload["session_id"] = Json::Int64(identity_.id);
     payload["spectator"] = spectator;
     payload["abandon_game"] = config_.abandon_game;
+    payload["duplicate_mode"] = config_.duplicate_mode;
 
     Json::Value state_payload(Json::objectValue);
     state_payload["round_counter"] = Json::UInt64(state_.round_counter);
     state_payload["stage_counter"] = Json::UInt64(state_.stage_counter);
-    state_payload["remaining_tile_count"] = Json::UInt64(static_cast<Json::UInt64>(wall_.size()));
+    state_payload["remaining_tile_count"] = Json::UInt64(static_cast<Json::UInt64>(wall_size()));
     state_payload["ended"] = lifecycle_.ended;
     if (lifecycle_.ended) {
         state_payload["final_scores"] = SerializeScores(lifecycle_.final_scores);

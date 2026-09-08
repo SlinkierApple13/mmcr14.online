@@ -1,19 +1,45 @@
 #include "game/hub/hub_internal.h"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <utility>
 
+#include "duplicate/manager.h"
 #include "game/engine/session.h"
 
 namespace mmcr::game {
+namespace {
+
+// Ranked end callback: completes the duplicate bookkeeping (if any) and
+// forwards to the transport for stats/ranking.
+auto MakeSessionEndCallback(GameHub* hub, GameTransport* transport) {
+    return [hub, transport](std::int64_t session_id,
+                            const std::array<std::int64_t, 4>& player_ids,
+                            const std::array<int, 4>& final_scores,
+                            int round_count) {
+        hub->complete_session(session_id);
+        transport->on_session_ended(session_id, player_ids, final_scores, round_count);
+    };
+}
+
+// Unranked (duplicate) end callback: only duplicate bookkeeping.
+auto MakeDuplicateSessionEndCallback(GameHub* hub) {
+    return [hub](std::int64_t session_id) {
+        hub->complete_session(session_id);
+    };
+}
+
+}  // namespace
 
 GameHub::GameHub(random::SeedContainer* seed_container,
                                  GameTransport* transport,
-                                 storage::GameRecordManager* record_manager)
+                                 storage::GameRecordManager* record_manager,
+                                 duplicate::DuplicateManager* duplicate_manager)
     : seed_container_(seed_container),
       transport_(transport),
             record_manager_(record_manager),
+      duplicate_manager_(duplicate_manager),
     session_id_rng_(seed_container != nullptr ? seed_container->Extract() : std::random_device{}()),
       gc_thread_(&GameHub::garbage_collect_loop, this) {}
 
@@ -91,6 +117,7 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
     }
 
     auto game_config = request.game_config;
+    game_config.singleplayer = request.queue_config.singleplayer;
     if (request.queue_config.singleplayer) {
         game_config.recorded = false;
         game_config.unranked = true;
@@ -100,6 +127,36 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
     }
     if (!game_config.recorded) {
         game_config.unranked = true;
+    }
+
+    std::string duplicate_token;
+    if (game_config.duplicate_mode) {
+        if (!game_config.duplicate_token.has_value() || game_config.duplicate_token->empty()) {
+            return util::Status::InvalidArgument("duplicate mode requires a duplicate token");
+        }
+        if (request.queue_config.singleplayer) {
+            return util::Status::InvalidArgument("duplicate mode cannot be singleplayer");
+        }
+        if (duplicate_manager_ == nullptr) {
+            return util::Status::Internal("duplicate manager is unavailable");
+        }
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        auto started = duplicate_manager_->StartSession(*game_config.duplicate_token, now_ms);
+        if (!started.ok()) {
+            return started.status();
+        }
+        if (game_config.round_count != static_cast<int>(started.value().round_count)) {
+            // Roll back the allocated session number — this creation is rejected.
+            (void)duplicate_manager_->EndSession(started.value().creation_token, now_ms, false);
+            return util::Status::InvalidArgument(
+                "round_count must match the seed list round count (" +
+                std::to_string(started.value().round_count) + ")");
+        }
+        game_config.duplicate_token = started.value().creation_token;
+        game_config.duplicate_seeds = std::move(started.value().seeds);
+        game_config.duplicate_session_number = started.value().next_session_number;
+        duplicate_token = started.value().creation_token;
     }
     const bool use_unranked_id = game_config.unranked || !game_config.recorded;
 
@@ -139,14 +196,15 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
                     players,
                     game_config,
                     record_manager_));
-            if (auto it = active_sessions_.find(session_id); it != active_sessions_.end() && transport_ != nullptr) {
-                it->second->set_session_end_callback(
-                    [transport = transport_](std::int64_t sid,
-                        const std::array<std::int64_t, 4>& pids,
-                        const std::array<int, 4>& scores,
-                        int rounds) {
-                        transport->on_session_ended(sid, pids, scores, rounds);
-                    });
+            if (auto it = active_sessions_.find(session_id); it != active_sessions_.end()) {
+                if (transport_ != nullptr) {
+                    it->second->set_session_end_callback(
+                        MakeSessionEndCallback(this, transport_));
+                }
+                if (it->second->config().duplicate_mode) {
+                    it->second->set_duplicate_session_end_callback(
+                        MakeDuplicateSessionEndCallback(this));
+                }
             }
             player_active_sessions_[request.owner.player_id] = session_id;
         } else {
@@ -156,6 +214,10 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
                     this, session_id, game_config, request.queue_config));
             (void)inserted;
             pending_it->second->ensure_empty_timer();
+        }
+        if (!duplicate_token.empty()) {
+            std::lock_guard token_lock(duplicate_tokens_mutex_);
+            duplicate_session_tokens_[session_id] = std::move(duplicate_token);
         }
         browsing_players_.erase(request.owner.player_id);
     }
@@ -432,7 +494,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
         return util::Status::Ok();
     }
 
-    if (*message_type == "queue.ready") {
+    if (*message_type == "queue.ready" || *message_type == "queue.choose_seat") {
         const Json::Value* payload = FindPayload(request.message);
         if (payload == nullptr) {
             return util::Status::InvalidArgument("payload must be a JSON object");
@@ -588,6 +650,29 @@ std::optional<std::int64_t> GameHub::find_player_active_session_id(
     return player_it->second;
 }
 
+void GameHub::complete_session(std::int64_t session_id) {
+    std::string duplicate_token;
+    bool session_started = false;
+    {
+        std::lock_guard token_lock(duplicate_tokens_mutex_);
+        const auto it = duplicate_session_tokens_.find(session_id);
+        if (it != duplicate_session_tokens_.end()) {
+            duplicate_token = it->second;
+            duplicate_session_tokens_.erase(it);
+        }
+        const auto started_it = duplicate_started_sessions_.find(session_id);
+        if (started_it != duplicate_started_sessions_.end()) {
+            session_started = true;
+            duplicate_started_sessions_.erase(started_it);
+        }
+    }
+    if (!duplicate_token.empty() && duplicate_manager_ != nullptr) {
+        const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        (void)duplicate_manager_->EndSession(duplicate_token, now_ms, session_started);
+    }
+}
+
 void GameHub::register_anonymous_browser() {
     std::unique_lock lock(mutex_);
     browsing_players_.insert(0);
@@ -627,13 +712,30 @@ util::Status GameHub::route_pending_message(const RouteGameMessageRequest& reque
     if (!message_type.has_value()) {
         return util::Status::InvalidArgument("message type is required");
     }
-    if (*message_type != "queue.ready") {
-        return util::Status::InvalidArgument("unsupported pending-session message type");
-    }
 
     const Json::Value* payload = FindPayload(request.message);
     if (payload == nullptr) {
         return util::Status::InvalidArgument("payload must be a JSON object");
+    }
+
+    const auto player_id = request.player.player_id();
+
+    if (*message_type == "queue.choose_seat") {
+        auto seat_index = ReadRequiredInt64(*payload, "seat_index");
+        if (!seat_index.ok()) {
+            return seat_index.status();
+        }
+        const auto status = session.choose_seat(
+            player_id, static_cast<int>(seat_index.value()));
+        if (!status.ok()) {
+            return status;
+        }
+        BroadcastPendingSnapshot(*this, session);
+        return util::Status::Ok();
+    }
+
+    if (*message_type != "queue.ready") {
+        return util::Status::InvalidArgument("unsupported pending-session message type");
     }
 
     auto ready = ReadRequiredBool(*payload, "ready");
@@ -641,7 +743,6 @@ util::Status GameHub::route_pending_message(const RouteGameMessageRequest& reque
         return ready.status();
     }
 
-    const auto player_id = request.player.player_id();
     const auto status = session.player_ready(player_id, ready.value());
     if (!status.ok()) {
         return status;
@@ -705,16 +806,26 @@ util::Status GameHub::start_active_session(std::int64_t session_id) {
                 players,
                 game_config,
                 record_manager_));
-        if (auto it = active_sessions_.find(session_id); it != active_sessions_.end() && transport_ != nullptr) {
-            it->second->set_session_end_callback(
-                [transport = transport_](std::int64_t sid,
-                    const std::array<std::int64_t, 4>& pids,
-                    const std::array<int, 4>& scores,
-                    int rounds) {
-                    transport->on_session_ended(sid, pids, scores, rounds);
-                });
+        if (auto it = active_sessions_.find(session_id); it != active_sessions_.end()) {
+            if (transport_ != nullptr) {
+                it->second->set_session_end_callback(
+                    MakeSessionEndCallback(this, transport_));
+            }
+            if (it->second->config().duplicate_mode) {
+                it->second->set_duplicate_session_end_callback(
+                    MakeDuplicateSessionEndCallback(this));
+            }
         }
         pending_sessions_.erase(pending_it);
+
+        // A session that actually started counts toward the seed list's
+        // started-session counter (distinct from the live-table counter).
+        if (game_config.duplicate_mode && game_config.duplicate_token.has_value() &&
+            duplicate_manager_ != nullptr) {
+            (void)duplicate_manager_->MarkSessionStarted(*game_config.duplicate_token);
+            std::lock_guard token_lock(duplicate_tokens_mutex_);
+            duplicate_started_sessions_.insert(session_id);
+        }
     }
 
     const Json::Value envelope = BuildResumeRequiredEnvelope(session_id);

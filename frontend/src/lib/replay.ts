@@ -38,8 +38,10 @@ type ReplayBaseSnapshot = {
   result_event: GameEventSnapshot | null
   last_discarder_seat: number | null
   wall_slots: Array<number | null> | null
+  wall_duplicate: boolean
   wall_front_stack: number
   wall_back_stack: number
+  wall_front_stacks: number[] | null
 }
 
 export interface ReplayTimelineEntry {
@@ -152,8 +154,10 @@ function cloneBaseSnapshot(snapshot: ReplayBaseSnapshot): ReplayBaseSnapshot {
     result_event: cloneResultEvent(snapshot.result_event),
     last_discarder_seat: snapshot.last_discarder_seat,
     wall_slots: snapshot.wall_slots ? [...snapshot.wall_slots] : null,
+    wall_duplicate: snapshot.wall_duplicate,
     wall_front_stack: snapshot.wall_front_stack,
     wall_back_stack: snapshot.wall_back_stack,
+    wall_front_stacks: snapshot.wall_front_stacks ? [...snapshot.wall_front_stacks] : null,
   }
 }
 
@@ -394,14 +398,48 @@ function createInitialBaseSnapshot(roundRecord: ReplayRoundRecord): ReplayBaseSn
     result_event: null,
     last_discarder_seat: null,
     wall_slots: wallSlots,
+    wall_duplicate: Boolean(
+      startSnapshot.duplicate_mode && Array.isArray(startSnapshot.wall_front_indices) &&
+      startSnapshot.wall_front_indices.length === 4,
+    ),
     wall_front_stack: typeof startSnapshot.wall_front_index === 'number' ? startSnapshot.wall_front_index : 0,
     wall_back_stack: typeof startSnapshot.wall_back_index === 'number' ? startSnapshot.wall_back_index : 0,
+    wall_front_stacks: Array.isArray(startSnapshot.wall_front_indices) &&
+      startSnapshot.wall_front_indices.length === 4
+      ? [...startSnapshot.wall_front_indices]
+      : null,
   }
 }
 
-function consumeWallFront(base: ReplayBaseSnapshot): void {
+function consumeWallFront(base: ReplayBaseSnapshot, seat: number): void {
   const slots = base.wall_slots
   if (!slots) return
+  if (base.wall_duplicate && base.wall_front_stacks) {
+    // Mirror DuplicateWall::draw_front: each seat draws from its own stack
+    // range; when the stack hits its end index — or a fully consumed pair —
+    // the draw spills over into the previous seat's stack.
+    const endIndices = [17, 0, 51, 34]
+    let currentSeat = ((seat % 4) + 4) % 4
+    for (let attempt = 0; attempt < 68 * 4; attempt += 1) {
+      const front: number = ((base.wall_front_stacks[currentSeat] ?? 0) % 68 + 68) % 68
+      if (front === endIndices[currentSeat]) {
+        currentSeat = (currentSeat + 3) % 4
+        continue
+      }
+      const index = front * 2
+      if (slots[index] !== null && slots[index] !== undefined) {
+        slots[index] = null
+        return
+      }
+      if (slots[index + 1] !== null && slots[index + 1] !== undefined) {
+        slots[index + 1] = null
+        base.wall_front_stacks[currentSeat] = (front + 1) % 68
+        return
+      }
+      currentSeat = (currentSeat + 3) % 4
+    }
+    return
+  }
   const index = (base.wall_front_stack % 68) * 2
   if (slots[index] !== null && slots[index] !== undefined) {
     slots[index] = null
@@ -463,7 +501,7 @@ function applyTransition(
       const drawnTiles = event.drawn_tiles ?? []
       actor.hand_tiles.push(...drawnTiles)
       for (let count = 0; count < drawnTiles.length; count += 1) {
-        consumeWallFront(base)
+        consumeWallFront(base, actorSeat)
       }
       base.state.remaining_tile_count = Math.max(
         0,
@@ -473,10 +511,10 @@ function applyTransition(
       return
     }
     case 'draw_tile': {
-      if (event.draw_from_back) {
+      if (event.draw_from_back && !base.wall_duplicate) {
         consumeWallBack(base)
       } else {
-        consumeWallFront(base)
+        consumeWallFront(base, actorSeat)
       }
       if (typeof event.tile === 'number') {
         actor.drawn_tile = event.tile

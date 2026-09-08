@@ -242,7 +242,7 @@ TEST(StatsServiceTest, PersistsLoadsAndQueriesRoundEntries) {
     ASSERT_TRUE(standard_page.value().rounds.front()->winning_hand.has_value());
 
     mmcr::stats::StatsFilter nonstandard_only;
-    nonstandard_only.nonstandard_only = true;
+    nonstandard_only.mode_filter = 1;  // unranked-only
     auto nonstandard_rounds = reloaded.ListRounds(nonstandard_only, "time", "asc", 0, 10);
     ASSERT_TRUE(nonstandard_rounds.ok()) << nonstandard_rounds.status().DebugString();
     EXPECT_EQ(nonstandard_rounds.value().total_count, 1u);

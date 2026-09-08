@@ -8,6 +8,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <jsoncpp/json/json.h>
@@ -15,6 +16,7 @@
 #include "auth/service.h"
 #include "external/qingque/basic/mahjong.h"
 #include "game/config.h"
+#include "game/engine/duplicate_wall.h"
 #include "game/engine/hand.h"
 #include "game/engine/timer.h"
 #include "game/engine/wall.h"
@@ -284,6 +286,14 @@ public:
         session_end_callback_ = std::move(callback);
     }
 
+    using DuplicateSessionEndCallback = std::function<void(std::int64_t session_id)>;
+
+    // Invoked unconditionally when the session ends (duplicate sessions are
+    // unranked, so the ranked end callback never fires for them).
+    void set_duplicate_session_end_callback(DuplicateSessionEndCallback callback) {
+        duplicate_session_end_callback_ = std::move(callback);
+    }
+
     [[nodiscard]] auto session_id() const noexcept -> std::int64_t {
         return identity_.id;
     }
@@ -347,7 +357,7 @@ private:
     void enqueue_current_round_record();
 
     GameConfig config_;
-    Wall wall_;
+    std::variant<Wall, DuplicateWall> wall_;
     std::array<Seat, 4> seats_{};
     std::vector<Event> transition_queue_;
     std::vector<Event> event_queue_;
@@ -361,14 +371,24 @@ private:
     GameHub* hub_{nullptr};
     storage::GameRecordManager* record_manager_{nullptr};
     SessionEndCallback session_end_callback_;
+    DuplicateSessionEndCallback duplicate_session_end_callback_;
     SessionIdentity identity_;
     SessionLifecycle lifecycle_;
     RoundRecording recording_;
     std::mt19937_64 random_pause_rng_;
+    std::size_t duplicate_shuffle_counter_{0};
     Timer transition_timer_;
     std::array<Timer, 4> pending_start_timers_{};
 
     [[nodiscard]] auto handle_event(const Event& event) -> util::Status;
+
+    // Wall helpers that dispatch to Wall or DuplicateWall based on config.
+    [[nodiscard]] auto wall_empty() const -> bool;
+    [[nodiscard]] auto wall_size() const -> std::size_t;
+    [[nodiscard]] auto wall_draw(int seat, int count)
+        -> util::StatusOr<std::vector<mahjong::tile_t>>;
+    [[nodiscard]] auto wall_draw_tile(int seat, bool from_back)
+        -> util::StatusOr<mahjong::tile_t>;
 
     void init();
     void execute_transition();

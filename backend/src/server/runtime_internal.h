@@ -19,6 +19,7 @@
 #include <jsoncpp/json/json.h>
 
 #include "auth/service.h"
+#include "duplicate/manager.h"
 #include "game/engine/session.h"
 #include "game/hub/hub.h"
 #include "random/seed.h"
@@ -105,6 +106,10 @@ void ApplyCorsHeaders(const drogon::HttpResponsePtr& response);
     const Json::Value& object,
     std::initializer_list<std::string_view> names,
     std::string_view label);
+[[nodiscard]] util::StatusOr<int> ReadRequiredInt(
+    const Json::Value& object,
+    std::initializer_list<std::string_view> names,
+    std::string_view label);
 [[nodiscard]] util::StatusOr<bool> ReadOptionalBool(
     const Json::Value& object,
     std::initializer_list<std::string_view> names,
@@ -132,8 +137,6 @@ void ApplyCorsHeaders(const drogon::HttpResponsePtr& response);
 [[nodiscard]] Json::Value SerializeActiveSummaryList(
     const std::vector<game::ActiveSessionSummary>& sessions);
 [[nodiscard]] Json::Value SerializeReplayInfo(const replay::ReplayInfo& replay_info);
-[[nodiscard]] Json::Value SerializeReplayInfoList(
-    const std::vector<replay::ReplayInfo>& sessions);
 
 [[nodiscard]] std::string FormatHexSeed(std::uint64_t value);
 void NormalizeReplaySeedFields(Json::Value& round_record);
@@ -187,6 +190,7 @@ void AttachReplayWallState(Json::Value& round_record);
 
 [[nodiscard]] std::filesystem::path AuthMigrationsPath();
 [[nodiscard]] std::filesystem::path StatsMigrationsPath();
+[[nodiscard]] std::filesystem::path DuplicateMigrationsPath();
 [[nodiscard]] std::filesystem::path RatingMigrationsPath();
 
 enum class WebSocketRoute {
@@ -501,6 +505,8 @@ public:
 
     [[nodiscard]] stats::StatsService& stats();
     [[nodiscard]] const stats::StatsService& stats() const;
+    [[nodiscard]] duplicate::DuplicateManager& duplicate_manager();
+    [[nodiscard]] const duplicate::DuplicateManager& duplicate_manager() const;
     [[nodiscard]] GameSocketHub& socket_hub();
     [[nodiscard]] DebugTrafficLogger* traffic_logger();
     [[nodiscard]] ranking::RatingService& rating();
@@ -513,6 +519,8 @@ private:
     DatabasePool database_pool_;
     DebugTrafficLogger traffic_logger_;
     storage::GameRecordManager record_manager_;
+    storage::Database duplicate_database_;
+    duplicate::DuplicateManager duplicate_manager_;
     storage::Database stats_database_;
     stats::StatsService stats_service_;
     storage::Database rating_database_;
@@ -552,37 +560,6 @@ private:
 [[nodiscard]] util::StatusOr<Json::Value> BuildReplaySessionPayload(
     const ServerState& state,
     std::string_view session_identifier);
-
-// ---------------------------------------------------------------------------
-// Replay list query
-// ---------------------------------------------------------------------------
-
-struct ReplayListQuery {
-    int page{1};
-    int page_size{10};
-    std::string session_query;
-    std::string player_query;
-    bool exact_session_match{false};
-    std::optional<std::int64_t> started_after_ms;
-    std::optional<std::int64_t> started_before_ms;
-};
-
-[[nodiscard]] util::StatusOr<std::string> ReadOptionalStringField(
-    const Json::Value& object,
-    std::initializer_list<std::string_view> names,
-    std::string_view label);
-[[nodiscard]] util::StatusOr<std::optional<std::int64_t>> ReadOptionalInt64Field(
-    const Json::Value& object,
-    std::initializer_list<std::string_view> names,
-    std::string_view label);
-[[nodiscard]] std::string ToLowerCopy(std::string_view value);
-[[nodiscard]] bool ContainsCaseInsensitive(std::string_view haystack, std::string_view needle);
-[[nodiscard]] bool EqualsCaseInsensitiveText(std::string_view left, std::string_view right);
-[[nodiscard]] util::StatusOr<ReplayListQuery> ParseReplayListQuery(
-    const Json::Value& object);
-[[nodiscard]] util::StatusOr<Json::Value> BuildReplayListPayload(
-    const ServerState& state,
-    const ReplayListQuery& query);
 
 // ---------------------------------------------------------------------------
 // Route registration (defined in http_routes.cc / ws_controllers.cc)

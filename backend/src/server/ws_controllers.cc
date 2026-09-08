@@ -332,7 +332,7 @@ private:
         result.overall = true;
         result.cache_key = "overall";
         result.filter.exclude_superior_fans = false;
-        result.filter.nonstandard_only = false;
+        result.filter.mode_filter = 0;
         result.service_version = service_version;
         result.time_desc_rounds = std::move(rounds);
         result.stats_data = collection.ToJson(false);
@@ -563,108 +563,6 @@ private:
     std::shared_ptr<ServerState> state_;
 };
 
-class ReplayListWebSocketController final
-    : public drogon::WebSocketController<ReplayListWebSocketController, false> {
-public:
-    explicit ReplayListWebSocketController(std::shared_ptr<ServerState> state)
-        : state_(std::move(state)) {}
-
-    void handleNewMessage(const drogon::WebSocketConnectionPtr& connection,
-                 std::string&& message,
-                 const drogon::WebSocketMessageType& type) override {
-        state_->LogWebSocketInbound(connection, message, type);
-        if (type != drogon::WebSocketMessageType::Text) {
-            return;
-        }
-
-        auto parsed_message = ParseWebSocketMessage(message);
-        if (!parsed_message.ok()) {
-            state_->SendWebSocketJson(
-                connection,
-                MakeWebSocketError("invalid_message", parsed_message.status().message(), ""));
-            return;
-        }
-
-        const Json::Value& root = parsed_message.value();
-        std::string request_id;
-        const Json::Value* request_id_value = FindField(root, {"requestId", "request_id"});
-        if (request_id_value != nullptr && request_id_value->isString()) {
-            request_id = request_id_value->asString();
-        }
-
-        auto type_value = FindMessageTypeString(root);
-        if (type_value.has_value() && *type_value == "ping") {
-            state_->SendWebSocketJson(connection, MakeWebSocketAck(request_id));
-            return;
-        }
-        if (!type_value.has_value() || *type_value != "replay.list.query") {
-            state_->SendWebSocketJson(
-                connection,
-                MakeWebSocketError(
-                    "unsupported_message",
-                    "replay list websocket only accepts replay.list.query messages",
-                    request_id));
-            return;
-        }
-
-        const Json::Value* payload_value = FindField(root, {"payload"});
-        const Json::Value& payload_object =
-            (payload_value != nullptr && payload_value->isObject())
-                ? *payload_value
-                : Json::Value(Json::objectValue);
-        auto query = ParseReplayListQuery(payload_object);
-        if (!query.ok()) {
-            state_->SendWebSocketJson(
-                connection,
-                MakeWebSocketError("invalid_request", query.status().message(), request_id));
-            return;
-        }
-
-        auto response_payload = BuildReplayListPayload(*state_, query.value());
-        if (!response_payload.ok()) {
-            state_->SendWebSocketJson(
-                connection,
-                MakeWebSocketError(
-                    "replay_list_load_failed",
-                    response_payload.status().message(),
-                    request_id));
-            return;
-        }
-
-        state_->SendWebSocketJson(
-            connection,
-            MakeWebSocketEnvelope("replay.list.page", std::move(response_payload.value()), request_id));
-    }
-
-    void handleNewConnection(const drogon::HttpRequestPtr& request,
-                    const drogon::WebSocketConnectionPtr& connection) override {
-        (void)request;
-        auto payload = BuildReplayListPayload(*state_, ReplayListQuery{});
-        if (!payload.ok()) {
-            state_->SendWebSocketJson(
-                connection,
-                MakeWebSocketError("replay_list_load_failed", payload.status().message(), ""));
-            connection->forceClose();
-            return;
-        }
-
-        state_->SendWebSocketJson(
-            connection,
-            MakeWebSocketEnvelope("replay.list.page", std::move(payload.value())));
-    }
-
-    void handleConnectionClosed(const drogon::WebSocketConnectionPtr& connection) override {
-        (void)connection;
-    }
-
-    WS_PATH_LIST_BEGIN
-    WS_PATH_ADD("/ws/replays", drogon::Get);
-    WS_PATH_LIST_END
-
-private:
-    std::shared_ptr<ServerState> state_;
-};
-
 class GameWebSocketController final
     : public drogon::WebSocketController<GameWebSocketController, false> {
 public:
@@ -841,6 +739,20 @@ public:
                     MakeWebSocketError(
                         StatusCodeName(active_session.status().code()),
                         active_session.status().message(),
+                        {}),
+                    0,
+                    std::nullopt,
+                    route);
+                connection->forceClose();
+                return;
+            }
+
+            if (active_session.value()->config().duplicate_mode) {
+                state_->SendWebSocketJson(
+                    connection,
+                    MakeWebSocketError(
+                        "spectator_not_allowed",
+                        "复式对局不接受观战",
                         {}),
                     0,
                     std::nullopt,
@@ -1662,7 +1574,6 @@ private:
 
 void RegisterWebSocketControllers(const std::shared_ptr<ServerState>& state) {
     drogon::app().registerController(std::make_shared<GameWebSocketController>(state));
-    drogon::app().registerController(std::make_shared<ReplayListWebSocketController>(state));
     drogon::app().registerController(std::make_shared<ReplayWebSocketController>(state));
     drogon::app().registerController(std::make_shared<StatsWebSocketController>(state));
 }

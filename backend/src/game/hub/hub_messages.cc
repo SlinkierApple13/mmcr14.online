@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include "game/engine/session.h"
@@ -118,13 +119,19 @@ PendingSessionSummary BuildPendingSummary(const PendingSession& session) {
         }
     }
 
+    const bool duplicate_mode = session.duplicate_mode();
+    int member_count = 0;
     std::vector<std::string> names;
-    for (const auto& seat : session.seats()) {
-        auto player = seat.player.lock();
-        if (player) {
-            names.push_back(player->username);
-        } else {
-            names.push_back("");
+    if (duplicate_mode) {
+        member_count = static_cast<int>(session.members().size());
+        for (const auto& member : session.members()) {
+            auto player = member.lock();
+            names.push_back(player != nullptr ? player->username : "");
+        }
+    } else {
+        for (const auto& seat : session.seats()) {
+            auto player = seat.player.lock();
+            names.push_back(player != nullptr ? player->username : "");
         }
     }
 
@@ -132,6 +139,7 @@ PendingSessionSummary BuildPendingSummary(const PendingSession& session) {
         .session_id = session.session_id(),
         .occupied_seat_count = occupied_seat_count,
         .ready_seat_count = ready_seat_count,
+        .member_count = member_count,
         .primary_timer_ms = session.game_config().primary_timer_ms,
         .secondary_timer_ms = session.game_config().secondary_timer_ms,
         .auxiliary_timer_ms = session.game_config().auxiliary_timer_ms,
@@ -139,9 +147,14 @@ PendingSessionSummary BuildPendingSummary(const PendingSession& session) {
         .forced_end_floor = session.game_config().forced_end_floor,
         .recorded = session.game_config().recorded,
         .debug_mode = session.game_config().debug_mode,
+        .unranked = session.game_config().unranked,
+        .singleplayer = session.game_config().singleplayer,
         .public_session = session.game_config().public_session,
         .abandon_game = session.game_config().abandon_game,
-        .can_join = occupied_seat_count < static_cast<int>(session.seats().size()),
+        .duplicate_mode = session.game_config().duplicate_mode,
+        .can_join = duplicate_mode
+            ? member_count < static_cast<int>(session.seats().size())
+            : occupied_seat_count < static_cast<int>(session.seats().size()),
         .can_start = occupied_seat_count == static_cast<int>(session.seats().size()) &&
                      ready_seat_count == static_cast<int>(session.seats().size()),
         .names = std::move(names),
@@ -153,6 +166,7 @@ Json::Value SerializePendingSummary(const PendingSessionSummary& summary) {
     payload["session_id"] = Json::Int64(summary.session_id);
     payload["occupied_seat_count"] = summary.occupied_seat_count;
     payload["ready_seat_count"] = summary.ready_seat_count;
+    payload["member_count"] = summary.member_count;
     payload["primary_timer_ms"] = summary.primary_timer_ms;
     payload["secondary_timer_ms"] = summary.secondary_timer_ms;
     payload["auxiliary_timer_ms"] = summary.auxiliary_timer_ms;
@@ -162,8 +176,11 @@ Json::Value SerializePendingSummary(const PendingSessionSummary& summary) {
         : Json::Value(Json::nullValue);
     payload["recorded"] = summary.recorded;
     payload["debug_mode"] = summary.debug_mode;
+    payload["unranked"] = summary.unranked;
+    payload["singleplayer"] = summary.singleplayer;
     payload["public_session"] = summary.public_session;
     payload["abandon_game"] = summary.abandon_game;
+    payload["duplicate_mode"] = summary.duplicate_mode;
     payload["can_join"] = summary.can_join;
     payload["can_start"] = summary.can_start;
     Json::Value names(Json::arrayValue);
@@ -197,6 +214,9 @@ Json::Value SerializeActiveSummaryList(const std::vector<ActiveSessionSummary>& 
         entry["round_counter"] = Json::UInt64(session.round_counter);
         entry["recorded"] = session.recorded;
         entry["debug_mode"] = session.debug_mode;
+        entry["unranked"] = session.unranked;
+        entry["singleplayer"] = session.singleplayer;
+        entry["duplicate_mode"] = session.duplicate_mode;
         entry["ended"] = session.ended;
         entry["public_session"] = session.public_session;
         entry["abandon_game"] = session.abandon_game;
@@ -229,6 +249,7 @@ PendingSessionSnapshot BuildPendingSnapshot(const PendingSession& session) {
     return PendingSessionSnapshot{
         .summary = BuildPendingSummary(session),
         .seats = session.seats(),
+        .members = session.members(),
     };
 }
 
@@ -242,6 +263,28 @@ Json::Value SerializePendingSnapshot(const PendingSessionSnapshot& snapshot) {
         seats.append(SerializePendingSeat(seat));
     }
     payload["seats"] = std::move(seats);
+
+    if (snapshot.summary.duplicate_mode) {
+        Json::Value members(Json::arrayValue);
+        for (const auto& member : snapshot.members) {
+            auto player = member.lock();
+            if (player == nullptr) {
+                continue;
+            }
+            Json::Value entry(Json::objectValue);
+            entry["player_id"] = Json::Int64(player->player_id);
+            entry["username"] = player->username;
+            entry["seat_index"] = -1;
+            for (const auto& seat : snapshot.seats) {
+                if (seat.player.matches(player->player_id)) {
+                    entry["seat_index"] = seat.seat_index;
+                    break;
+                }
+            }
+            members.append(std::move(entry));
+        }
+        payload["members"] = std::move(members);
+    }
     return payload;
 }
 
@@ -268,11 +311,21 @@ void BroadcastPendingSnapshot(GameHub& hub, const PendingSession& session) {
     }
     
     const Json::Value envelope = BuildEnvelope("session.snapshot", std::move(payload));
+    std::unordered_set<std::int64_t> recipients;
     for (const auto& seat : snapshot.seats) {
         const auto player = seat.player.lock();
         if (player != nullptr) {
-            hub.send_to_player(player->player_id, envelope);
+            recipients.insert(player->player_id);
         }
+    }
+    for (const auto& member : snapshot.members) {
+        const auto player = member.lock();
+        if (player != nullptr) {
+            recipients.insert(player->player_id);
+        }
+    }
+    for (const auto player_id : recipients) {
+        hub.send_to_player(player_id, envelope);
     }
 }
 
@@ -287,9 +340,12 @@ ActiveSessionSummary BuildActiveSummary(const ActiveSession& session) {
     summary.round_counter = session.state().round_counter;
     summary.recorded = session.config().recorded;
     summary.debug_mode = session.config().debug_mode;
+    summary.unranked = session.config().unranked;
+    summary.singleplayer = session.config().singleplayer;
     summary.ended = session.ended();
     summary.public_session = session.public_session();
     summary.abandon_game = session.config().abandon_game;
+    summary.duplicate_mode = session.config().duplicate_mode;
     for (const auto& seat : session.seats()) {
         const auto player = seat.player.lock();
         if (player != nullptr) {

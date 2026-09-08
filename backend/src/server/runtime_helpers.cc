@@ -584,6 +584,34 @@ util::StatusOr<bool> ReadRequiredBool(const Json::Value& object,
     return value->asBool();
 }
 
+util::StatusOr<int> ReadRequiredInt(const Json::Value& object,
+             std::initializer_list<std::string_view> names,
+             std::string_view label) {
+    const Json::Value* value = FindField(object, names);
+    if (value == nullptr) {
+        return util::Status::InvalidArgument(std::string(label) + " is required");
+    }
+
+    std::int64_t parsed_value = 0;
+    if (value->isInt() || value->isInt64()) {
+        parsed_value = value->asInt64();
+    } else if (value->isUInt() || value->isUInt64()) {
+        const auto unsigned_value = value->asUInt64();
+        if (unsigned_value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+            return util::Status::InvalidArgument(std::string(label) + " is out of range");
+        }
+        parsed_value = static_cast<std::int64_t>(unsigned_value);
+    } else {
+        return util::Status::InvalidArgument(std::string(label) + " must be an integer");
+    }
+
+    if (parsed_value < std::numeric_limits<int>::min() ||
+        parsed_value > std::numeric_limits<int>::max()) {
+        return util::Status::InvalidArgument(std::string(label) + " is out of range");
+    }
+    return static_cast<int>(parsed_value);
+}
+
 util::StatusOr<bool> ReadOptionalBool(const Json::Value& object,
               std::initializer_list<std::string_view> names,
               std::string_view label,
@@ -725,9 +753,13 @@ Json::Value SerializeActiveSummary(const game::ActiveSessionSummary& summary) {
         : Json::Value(Json::nullValue);
     payload["round_counter"] = Json::UInt64(summary.round_counter);
     payload["recorded"] = summary.recorded;
+    payload["debug_mode"] = summary.debug_mode;
+    payload["unranked"] = summary.unranked;
+    payload["singleplayer"] = summary.singleplayer;
     payload["ended"] = summary.ended;
     payload["public_session"] = summary.public_session;
     payload["abandon_game"] = summary.abandon_game;
+    payload["duplicate_mode"] = summary.duplicate_mode;
     Json::Value names(Json::arrayValue);
     for (const auto& name : summary.names) {
         names.append(name);
@@ -755,14 +787,6 @@ Json::Value SerializeReplayInfo(const replay::ReplayInfo& replay_info) {
         names.append(name);
     }
     payload["player_names"] = std::move(names);
-    return payload;
-}
-
-Json::Value SerializeReplayInfoList(const std::vector<replay::ReplayInfo>& sessions) {
-    Json::Value payload(Json::arrayValue);
-    for (const auto& session : sessions) {
-        payload.append(SerializeReplayInfo(session));
-    }
     return payload;
 }
 
@@ -825,9 +849,27 @@ void AttachReplayWallState(Json::Value& round_record) {
         }
     }
 
+    Json::Value wall_tiles(Json::arrayValue);
+    const auto& game_config = round_record["header"]["game_config"];
+    if (game_config.isObject() && game_config["duplicate_mode"].isBool() &&
+        game_config["duplicate_mode"].asBool()) {
+        game::DuplicateWall wall;
+        wall.prepare(std::move(seeds), {});
+        for (const auto tile : wall.tiles()) {
+            wall_tiles.append(Json::UInt(static_cast<unsigned int>(tile)));
+        }
+        round_start_snapshot["wall_tiles"] = std::move(wall_tiles);
+        round_start_snapshot["duplicate_mode"] = true;
+        Json::Value front_indices(Json::arrayValue);
+        for (const auto index : wall.front_stack_indices()) {
+            front_indices.append(Json::UInt64(index));
+        }
+        round_start_snapshot["wall_front_indices"] = std::move(front_indices);
+        return;
+    }
+
     game::Wall wall;
     wall.prepare(std::move(seeds), {});
-    Json::Value wall_tiles(Json::arrayValue);
     for (const auto tile : wall.tiles()) {
         wall_tiles.append(Json::UInt(static_cast<unsigned int>(tile)));
     }
@@ -987,6 +1029,39 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
         config.forced_end_floor = floor_value;
     }
 
+    auto duplicate_mode = ReadOptionalBool(
+        object, {"duplicate_mode", "duplicateMode"}, "duplicate_mode", config.duplicate_mode);
+    if (!duplicate_mode.ok()) {
+        return duplicate_mode.status();
+    }
+    config.duplicate_mode = duplicate_mode.value();
+
+    const Json::Value* duplicate_token = FindField(object, {"duplicate_token", "duplicateToken"});
+    if (duplicate_token != nullptr && duplicate_token->isString() && !duplicate_token->asString().empty()) {
+        config.duplicate_token = duplicate_token->asString();
+    }
+
+    if (config.duplicate_mode) {
+        if (!config.duplicate_token.has_value()) {
+            return util::Status::InvalidArgument("duplicate mode requires duplicate_token");
+        }
+        if (config.debug_mode) {
+            return util::Status::InvalidArgument("debug mode is not allowed with duplicate mode");
+        }
+        if (config.forced_end_floor.has_value()) {
+            return util::Status::InvalidArgument("forced_end_floor is not allowed with duplicate mode");
+        }
+        if (config.abandon_game) {
+            return util::Status::InvalidArgument("abandon_game is not allowed with duplicate mode");
+        }
+        // Duplicate games always preserve records and never affect rankings.
+        config.recorded = true;
+        config.unranked = true;
+        config.seat_shuffle_period = 4;
+    } else if (config.duplicate_token.has_value()) {
+        return util::Status::InvalidArgument("duplicate_token requires duplicate mode");
+    }
+
     auto bounds_status = ValidateGameConfigBounds(config);
     if (!bounds_status.ok()) {
         return bounds_status;
@@ -1078,6 +1153,7 @@ Json::Value SerializePendingSummary(const game::PendingSessionSummary& summary) 
     payload["session_id"] = Json::Int64(summary.session_id);
     payload["occupied_seat_count"] = summary.occupied_seat_count;
     payload["ready_seat_count"] = summary.ready_seat_count;
+    payload["member_count"] = summary.member_count;
     payload["round_count"] = summary.round_count;
     payload["forced_end_floor"] = summary.forced_end_floor.has_value()
         ? Json::Value(*summary.forced_end_floor)
@@ -1086,8 +1162,11 @@ Json::Value SerializePendingSummary(const game::PendingSessionSummary& summary) 
     payload["secondary_timer_ms"] = summary.secondary_timer_ms;
     payload["auxiliary_timer_ms"] = summary.auxiliary_timer_ms;
     payload["recorded"] = summary.recorded;
+    payload["unranked"] = summary.unranked;
+    payload["singleplayer"] = summary.singleplayer;
     payload["public_session"] = summary.public_session;
     payload["abandon_game"] = summary.abandon_game;
+    payload["duplicate_mode"] = summary.duplicate_mode;
     payload["can_join"] = summary.can_join;
     payload["can_start"] = summary.can_start;
     Json::Value names(Json::arrayValue);
@@ -1223,6 +1302,10 @@ std::filesystem::path AuthMigrationsPath() {
 
 std::filesystem::path StatsMigrationsPath() {
     return std::filesystem::path(MMCR_SOURCE_DIR) / "src" / "stats" / "migrations";
+}
+
+std::filesystem::path DuplicateMigrationsPath() {
+    return std::filesystem::path(MMCR_SOURCE_DIR) / "src" / "duplicate" / "migrations";
 }
 
 std::filesystem::path RatingMigrationsPath() {
@@ -1445,9 +1528,19 @@ stats::StatsFilter ParseStatsFilterFromJson(const Json::Value& json) {
     if (const Json::Value* exclude_superior = FindField(json, {"exclude_superior_fans"}); exclude_superior != nullptr && exclude_superior->isBool()) {
         filter.exclude_superior_fans = exclude_superior->asBool();
     }
-    if (const Json::Value* nonstandard_only = FindField(json, {"nonstandard_only"}); nonstandard_only != nullptr && nonstandard_only->isBool()) {
-        filter.nonstandard_only = nonstandard_only->asBool();
+    int mode = 0;
+    if (const Json::Value* mode_value = FindField(json, {"mode"}); mode_value != nullptr) {
+        if (mode_value->isInt()) {
+            mode = mode_value->asInt();
+        } else if (mode_value->isUInt()) {
+            mode = static_cast<int>(mode_value->asUInt());
+        }
     }
+    // Legacy: the old 休闲模式 switch mapped onto unranked-only filtering.
+    if (const Json::Value* nonstandard_only = FindField(json, {"nonstandard_only"}); nonstandard_only != nullptr && nonstandard_only->isBool() && nonstandard_only->asBool()) {
+        mode = 1;
+    }
+    filter.mode_filter = (mode >= -1 && mode <= 2) ? mode : 0;
 
     return filter;
 }
@@ -1557,6 +1650,10 @@ std::string SerializeStatsRoundEntriesPayload(
         Json::Value entry(Json::objectValue);
         entry["game_folder"] = round_entry->round_key.session_identifier;
         entry["game_index"] = static_cast<int>(round_entry->round_key.round_number);
+        if (!round_entry->duplicate_token.empty()) {
+            entry["display_folder"] = duplicate::TokenDisplayPrefix(round_entry->duplicate_token) +
+                "." + std::to_string(round_entry->duplicate_session_number);
+        }
         entry["drawn_game"] = round_entry->drawn_game;
         entry["winner"] = static_cast<int>(round_entry->winner_player_id());
         entry["from"] = static_cast<int>(round_entry->from_player_id());
@@ -1997,163 +2094,6 @@ bool ContainsCaseInsensitive(std::string_view haystack, std::string_view needle)
 
 bool EqualsCaseInsensitiveText(std::string_view left, std::string_view right) {
     return ToLowerCopy(left) == ToLowerCopy(right);
-}
-
-util::StatusOr<ReplayListQuery> ParseReplayListQuery(const Json::Value& object) {
-    if (!object.isObject()) {
-        return util::Status::InvalidArgument("replay list payload must be a JSON object");
-    }
-
-    ReplayListQuery query;
-
-    auto page = ReadOptionalInt(object, {"page"}, "page", query.page);
-    if (!page.ok()) {
-        return page.status();
-    }
-    if (page.value() <= 0) {
-        return util::Status::InvalidArgument("page must be positive");
-    }
-    query.page = page.value();
-
-    auto page_size = ReadOptionalInt(object, {"page_size", "pageSize"}, "page_size", query.page_size);
-    if (!page_size.ok()) {
-        return page_size.status();
-    }
-    if (page_size.value() <= 0 || page_size.value() > 50) {
-        return util::Status::InvalidArgument("page_size must be between 1 and 50");
-    }
-    query.page_size = page_size.value();
-
-    auto session_query = ReadOptionalStringField(object, {"session_query", "sessionQuery"}, "session_query");
-    if (!session_query.ok()) {
-        return session_query.status();
-    }
-    query.session_query = session_query.value();
-
-    auto player_query = ReadOptionalStringField(object, {"player_query", "playerQuery"}, "player_query");
-    if (!player_query.ok()) {
-        return player_query.status();
-    }
-    query.player_query = player_query.value();
-
-    auto exact_session_match = ReadOptionalBool(
-        object,
-        {"exact_session_match", "exactSessionMatch"},
-        "exact_session_match",
-        query.exact_session_match);
-    if (!exact_session_match.ok()) {
-        return exact_session_match.status();
-    }
-    query.exact_session_match = exact_session_match.value();
-
-    auto started_after_ms = ReadOptionalInt64Field(
-        object,
-        {"started_after_ms", "startedAfterMs"},
-        "started_after_ms");
-    if (!started_after_ms.ok()) {
-        return started_after_ms.status();
-    }
-    query.started_after_ms = started_after_ms.value();
-
-    auto started_before_ms = ReadOptionalInt64Field(
-        object,
-        {"started_before_ms", "startedBeforeMs"},
-        "started_before_ms");
-    if (!started_before_ms.ok()) {
-        return started_before_ms.status();
-    }
-    query.started_before_ms = started_before_ms.value();
-
-    if (query.started_after_ms.has_value() && query.started_before_ms.has_value() &&
-        *query.started_after_ms > *query.started_before_ms) {
-        return util::Status::InvalidArgument("started_after_ms must be less than or equal to started_before_ms");
-    }
-
-    return query;
-}
-
-util::StatusOr<Json::Value> BuildReplayListPayload(const ServerState& state,
-                const ReplayListQuery& query) {
-    auto replays = state.ListReplays();
-    if (!replays.ok()) {
-        return replays.status();
-    }
-
-    std::vector<const replay::ReplayInfo*> filtered_replays;
-    filtered_replays.reserve(replays.value().size());
-    std::unordered_set<std::string> unique_player_names;
-
-    for (const auto& replay_info : replays.value()) {
-        const auto timestamp_ms = static_cast<std::int64_t>(replay_info.timestamp_ns / 1000000ULL);
-        if (query.started_after_ms.has_value() && timestamp_ms < *query.started_after_ms) {
-            continue;
-        }
-        if (query.started_before_ms.has_value() && timestamp_ms > *query.started_before_ms) {
-            continue;
-        }
-
-        if (!query.session_query.empty()) {
-            const bool session_matches = query.exact_session_match
-                ? EqualsCaseInsensitiveText(replay_info.session_identifier, query.session_query)
-                : ContainsCaseInsensitive(replay_info.session_identifier, query.session_query);
-            if (!session_matches) {
-                continue;
-            }
-        }
-
-        if (!query.player_query.empty()) {
-            bool matched_player = false;
-            for (const auto& player_name : replay_info.player_names) {
-                if (ContainsCaseInsensitive(player_name, query.player_query)) {
-                    matched_player = true;
-                    break;
-                }
-            }
-            if (!matched_player) {
-                continue;
-            }
-        }
-
-        filtered_replays.push_back(&replay_info);
-        for (const auto& player_name : replay_info.player_names) {
-            const auto trimmed_name = TrimString(player_name);
-            if (!trimmed_name.empty()) {
-                unique_player_names.insert(std::string(trimmed_name));
-            }
-        }
-    }
-
-    const std::size_t total_count = filtered_replays.size();
-    const std::size_t page_count =
-        total_count == 0 ? 1 : (total_count + static_cast<std::size_t>(query.page_size) - 1) /
-                           static_cast<std::size_t>(query.page_size);
-    const std::size_t current_page = std::min<std::size_t>(
-        static_cast<std::size_t>(query.page),
-        page_count);
-    const std::size_t offset = (current_page - 1) * static_cast<std::size_t>(query.page_size);
-    const std::size_t end = std::min(
-        offset + static_cast<std::size_t>(query.page_size),
-        total_count);
-
-    Json::Value payload(Json::objectValue);
-    Json::Value replay_payload(Json::arrayValue);
-    for (std::size_t index = offset; index < end; ++index) {
-        replay_payload.append(SerializeReplayInfo(*filtered_replays[index]));
-    }
-    payload["replays"] = std::move(replay_payload);
-    payload["total_count"] = Json::UInt64(total_count);
-    payload["page"] = Json::UInt64(current_page);
-    payload["page_size"] = query.page_size;
-    payload["page_count"] = Json::UInt64(page_count);
-    payload["unique_player_count"] = Json::UInt64(unique_player_names.size());
-    payload["latest_timestamp_ms"] =
-        total_count == 0
-            ? Json::Value(Json::nullValue)
-            : Json::Value(Json::UInt64(filtered_replays.front()->timestamp_ns / 1000000ULL));
-    payload["session_query"] = query.session_query;
-    payload["player_query"] = query.player_query;
-    payload["exact_session_match"] = query.exact_session_match;
-    return payload;
 }
 
 }  // namespace mmcr::server

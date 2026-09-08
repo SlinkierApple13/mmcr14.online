@@ -251,12 +251,13 @@ ServerState::ServerState(RuntimeConfig config)
       resolved_thread_count_(ResolveWorkerThreadCount(config_.thread_count)),
       database_pool_(config_.database_path, ResolveDatabasePoolSize(config_.thread_count)),
       record_manager_(config_.records_path),
+      duplicate_manager_(&duplicate_database_),
       stats_service_(&stats_database_),
       rating_service_(&rating_database_),
       replay_manager_(config_.records_path, config_.imported_records_path),
       auth_config_(),
       socket_hub_(&traffic_logger_),
-      game_hub_(&seed_container_, this, &record_manager_) {}
+      game_hub_(&seed_container_, this, &record_manager_, &duplicate_manager_) {}
 
 util::Status ServerState::Initialize() {
     if (config_.database_path.empty()) {
@@ -308,9 +309,72 @@ util::Status ServerState::Initialize() {
     if (!status.ok()) {
         return status;
     }
+
+    status = duplicate_database_.Open({config_.database_path, true, true});
+    if (!status.ok()) {
+        return status;
+    }
+    status = duplicate_manager_.InitializeSchema(DuplicateMigrationsPath());
+    if (!status.ok()) {
+        return status;
+    }
+
+    // Records released from a destroyed seed list flow straight into stats.
+    duplicate_manager_.SetReleaseCallback([this](std::string payload_json) {
+        auto parsed = ParseJsonText(payload_json);
+        if (!parsed.has_value()) {
+            return;
+        }
+        (void)stats_service_.UpsertRoundRecord(*parsed);
+    });
+    stats_service_.SetDuplicateActivityCheck(
+        [this](std::string_view token) -> bool {
+            const auto active = duplicate_manager_.IsTokenActive(
+                token, CurrentUnixTimeMs());
+            return active.ok() && active.value();
+        });
+
     record_manager_.SetWriteObserver([this](const storage::GameRecordTask& task) {
+        const Json::Value& header = task.payload["header"];
+        const Json::Value& game_config = header["game_config"];
+        if (game_config.isObject() && game_config["duplicate_mode"].isBool() &&
+            game_config["duplicate_mode"].asBool()) {
+            const std::string token = header["duplicate_token"].isString()
+                ? header["duplicate_token"].asString()
+                : std::string();
+            if (token.empty()) {
+                return stats_service_.UpsertRoundRecord(task.payload);
+            }
+            const std::string session_identifier = header["session_identifier"].isString()
+                ? header["session_identifier"].asString()
+                : std::string();
+            const std::int64_t round_number = header["round_number"].isUInt64()
+                ? static_cast<std::int64_t>(header["round_number"].asUInt64())
+                : 0;
+            auto staged = duplicate_manager_.StageRecord(
+                token,
+                session_identifier,
+                round_number,
+                JsonToCompactString(task.payload),
+                CurrentUnixTimeMs());
+            if (!staged.ok()) {
+                return staged.status();
+            }
+            if (staged.value()) {
+                return util::Status::Ok();
+            }
+            // Seed list already destroyed — release directly into stats.
+            return stats_service_.UpsertRoundRecord(task.payload);
+        }
         return stats_service_.UpsertRoundRecord(task.payload);
     });
+
+    // Sessions do not survive a restart: expired seed lists can be removed
+    // outright (releasing their staged records into stats).
+    status = duplicate_manager_.OnServerStartup(CurrentUnixTimeMs());
+    if (!status.ok()) {
+        return status;
+    }
 
     status = rating_database_.Open({config_.database_path, true, true});
     if (!status.ok()) {
@@ -665,6 +729,14 @@ stats::StatsService& ServerState::stats() {
 
 const stats::StatsService& ServerState::stats() const {
     return stats_service_;
+}
+
+duplicate::DuplicateManager& ServerState::duplicate_manager() {
+    return duplicate_manager_;
+}
+
+const duplicate::DuplicateManager& ServerState::duplicate_manager() const {
+    return duplicate_manager_;
 }
 
 GameSocketHub& ServerState::socket_hub() {

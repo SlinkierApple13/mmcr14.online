@@ -244,22 +244,6 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
         },
         {drogon::Post});
 
-    drogon::app().registerHandler(
-        "/api/v1/replays",
-        [state](const drogon::HttpRequestPtr&,
-                std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
-            auto replays = state->ListReplays();
-            if (!replays.ok()) {
-                callback(NewStatusErrorResponse(replays.status()));
-                return;
-            }
-
-            Json::Value payload(Json::objectValue);
-            payload["replays"] = SerializeReplayInfoList(replays.value());
-            callback(NewJsonResponse(std::move(payload)));
-        },
-        {drogon::Get});
-
     drogon::app().registerHandlerViaRegex(
         "^/api/v1/replay/([^/]+)/rounds-after$",
         [state](const drogon::HttpRequestPtr& request,
@@ -320,6 +304,8 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
                 std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
             stats::StatsFilter filter;
             filter.min_fan = kLargeHandCutoff;
+            // Big wins are only drawn from ranked (段位) games.
+            filter.mode_filter = 0;
             auto result = state->stats().ListRounds(filter, "time", "desc", 0, kBigWinsMaxCount);
             if (!result.ok()) {
                 callback(NewStatusErrorResponse(result.status()));
@@ -336,6 +322,10 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
                 entry["game_folder"] = round_entry->round_key.session_identifier;
                 entry["game_index"] = static_cast<int>(round_entry->round_key.round_number);
                 entry["winner_seat"] = round_entry->winner_seat;
+                if (!round_entry->duplicate_token.empty()) {
+                    entry["display_folder"] = duplicate::TokenDisplayPrefix(round_entry->duplicate_token) +
+                        "." + std::to_string(round_entry->duplicate_session_number);
+                }
 
                 if (!round_entry->fan_ids.empty()) {
                     std::string fans_str;
@@ -646,6 +636,171 @@ void RegisterHttpRoutes(const std::shared_ptr<ServerState>& state) {
             Json::Value response_payload(Json::objectValue);
             response_payload["session"] = std::move(snapshot.value());
             callback(NewJsonResponse(std::move(response_payload)));
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler(
+        "/api/v1/duplicate/create",
+        [state](const drogon::HttpRequestPtr& request,
+                std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
+            auto authenticated = AuthenticateRequest(*state, request);
+            if (!authenticated.ok()) {
+                callback(NewUnauthorizedResponse(authenticated.status().message()));
+                return;
+            }
+
+            auto body = ParseJsonBody(request);
+            if (!body.ok()) {
+                callback(NewStatusErrorResponse(body.status()));
+                return;
+            }
+
+            auto round_count = ReadRequiredInt(*body.value(), {"round_count"}, "round_count");
+            if (!round_count.ok()) {
+                callback(NewStatusErrorResponse(round_count.status()));
+                return;
+            }
+            auto expiry_hours = ReadRequiredInt(*body.value(), {"expiry_hours"}, "expiry_hours");
+            if (!expiry_hours.ok()) {
+                callback(NewStatusErrorResponse(expiry_hours.status()));
+                return;
+            }
+
+            auto created = state->duplicate_manager().CreateSeedList(
+                static_cast<std::uint32_t>(round_count.value()),
+                expiry_hours.value(),
+                CurrentUnixTimeMs());
+            if (!created.ok()) {
+                callback(NewStatusErrorResponse(created.status()));
+                return;
+            }
+
+            Json::Value payload(Json::objectValue);
+            payload["creation_token"] = created.value().creation_token;
+            payload["master_token"] = created.value().master_token;
+            payload["round_count"] = Json::Int64(round_count.value());
+            payload["expires_at_ms"] = Json::Int64(created.value().expires_at_ms);
+            callback(NewJsonResponse(std::move(payload)));
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler(
+        "/api/v1/duplicate/query",
+        [state](const drogon::HttpRequestPtr& request,
+                std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
+            auto authenticated = AuthenticateRequest(*state, request);
+            if (!authenticated.ok()) {
+                callback(NewUnauthorizedResponse(authenticated.status().message()));
+                return;
+            }
+
+            auto body = ParseJsonBody(request);
+            if (!body.ok()) {
+                callback(NewStatusErrorResponse(body.status()));
+                return;
+            }
+
+            auto token = ReadRequiredString(*body.value(), {"token"}, "token");
+            if (!token.ok()) {
+                callback(NewStatusErrorResponse(token.status()));
+                return;
+            }
+
+            const std::int64_t now_ms = CurrentUnixTimeMs();
+            auto queried = state->duplicate_manager().Query(token.value(), now_ms);
+            if (!queried.ok()) {
+                callback(NewStatusErrorResponse(queried.status()));
+                return;
+            }
+
+            Json::Value payload(Json::objectValue);
+            payload["round_count"] = Json::Int64(queried.value().round_count);
+            payload["expires_at_ms"] = Json::Int64(queried.value().expires_at_ms);
+            payload["expired"] = queried.value().expired(now_ms);
+            payload["next_session_number"] = Json::Int64(queried.value().next_session_number);
+            payload["live_session_count"] = Json::Int64(queried.value().live_session_count);
+            payload["started_session_count"] = Json::Int64(queried.value().started_session_count);
+            callback(NewJsonResponse(std::move(payload)));
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler(
+        "/api/v1/duplicate/extend",
+        [state](const drogon::HttpRequestPtr& request,
+                std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
+            auto authenticated = AuthenticateRequest(*state, request);
+            if (!authenticated.ok()) {
+                callback(NewUnauthorizedResponse(authenticated.status().message()));
+                return;
+            }
+
+            auto body = ParseJsonBody(request);
+            if (!body.ok()) {
+                callback(NewStatusErrorResponse(body.status()));
+                return;
+            }
+
+            auto master_token = ReadRequiredString(*body.value(), {"master_token"}, "master_token");
+            if (!master_token.ok()) {
+                callback(NewStatusErrorResponse(master_token.status()));
+                return;
+            }
+            auto expiry_hours = ReadRequiredInt(*body.value(), {"expiry_hours"}, "expiry_hours");
+            if (!expiry_hours.ok()) {
+                callback(NewStatusErrorResponse(expiry_hours.status()));
+                return;
+            }
+
+            auto status = state->duplicate_manager().ExtendExpiry(
+                master_token.value(), expiry_hours.value(), CurrentUnixTimeMs());
+            if (!status.ok()) {
+                callback(NewStatusErrorResponse(status));
+                return;
+            }
+
+            auto queried = state->duplicate_manager().Query(
+                master_token.value(), CurrentUnixTimeMs());
+            if (!queried.ok()) {
+                callback(NewStatusErrorResponse(queried.status()));
+                return;
+            }
+
+            Json::Value payload(Json::objectValue);
+            payload["expires_at_ms"] = Json::Int64(queried.value().expires_at_ms);
+            callback(NewJsonResponse(std::move(payload)));
+        },
+        {drogon::Post});
+
+    drogon::app().registerHandler(
+        "/api/v1/duplicate/expire",
+        [state](const drogon::HttpRequestPtr& request,
+                std::function<void(const drogon::HttpResponsePtr&)> &&callback) {
+            auto authenticated = AuthenticateRequest(*state, request);
+            if (!authenticated.ok()) {
+                callback(NewUnauthorizedResponse(authenticated.status().message()));
+                return;
+            }
+
+            auto body = ParseJsonBody(request);
+            if (!body.ok()) {
+                callback(NewStatusErrorResponse(body.status()));
+                return;
+            }
+
+            auto master_token = ReadRequiredString(*body.value(), {"master_token"}, "master_token");
+            if (!master_token.ok()) {
+                callback(NewStatusErrorResponse(master_token.status()));
+                return;
+            }
+
+            auto status = state->duplicate_manager().ForceExpire(
+                master_token.value(), CurrentUnixTimeMs());
+            if (!status.ok()) {
+                callback(NewStatusErrorResponse(status));
+                return;
+            }
+
+            callback(NewJsonResponse(Json::Value(Json::objectValue)));
         },
         {drogon::Post});
 }

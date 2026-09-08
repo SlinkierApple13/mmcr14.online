@@ -32,6 +32,7 @@ struct PendingSessionSummary {
     std::int64_t session_id{0};
     int occupied_seat_count{0};
     int ready_seat_count{0};
+    int member_count{0};
     int primary_timer_ms{7000};
     int secondary_timer_ms{4000};
     int auxiliary_timer_ms{12000};
@@ -39,8 +40,11 @@ struct PendingSessionSummary {
     std::optional<int> forced_end_floor{std::nullopt};
     bool recorded{true};
     bool debug_mode{false};
+    bool unranked{false};
+    bool singleplayer{false};
     bool public_session{true};
     bool abandon_game{true};
+    bool duplicate_mode{false};
     bool can_join{true};
     bool can_start{false};
     std::vector<std::string> names;
@@ -49,6 +53,7 @@ struct PendingSessionSummary {
 struct PendingSessionSnapshot {
     PendingSessionSummary summary;
     std::array<PendingSeat, 4> seats{};
+    std::vector<auth::PlayerProfilePtr> members;
 };
 
 class PendingSession {
@@ -71,6 +76,18 @@ public:
     [[nodiscard]] auto seats() const -> const std::array<PendingSeat, 4>& {
         return seats_;
     }
+    [[nodiscard]] auto duplicate_mode() const noexcept -> bool {
+        return game_config_.duplicate_mode;
+    }
+    [[nodiscard]] auto members() const -> const std::vector<auth::PlayerProfilePtr>& {
+        return members_;
+    }
+    [[nodiscard]] auto is_member(std::int64_t player_id) const -> bool;
+    [[nodiscard]] auto chosen_seat_of(std::int64_t player_id) const -> std::optional<int>;
+
+    // Duplicate mode only: occupy or release a seat (selecting the seat the
+    // player already holds releases it).
+    [[nodiscard]] auto choose_seat(std::int64_t player_id, int seat_index) -> util::Status;
 
     [[nodiscard]] auto collect_invalid_players() -> std::vector<std::int64_t>;
     [[nodiscard]] auto empty_timeout_elapsed() const -> bool;
@@ -89,6 +106,7 @@ private:
     std::int64_t session_id_{0};
     mutable std::shared_mutex mutex_;
     std::array<PendingSeat, 4> seats_{};
+    std::vector<auth::PlayerProfilePtr> members_;  // duplicate mode membership
     GameConfig game_config_;
     bool empty_timeout_elapsed_{false};
     Timer empty_session_timer_;

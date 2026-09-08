@@ -358,6 +358,17 @@ util::StatusOr<RoundEntry> ProjectRoundRecord(const Json::Value& record) {
         return round_number.status();
     }
 
+    std::string duplicate_token;
+    std::int64_t duplicate_session_number = -1;
+    const Json::Value& duplicate_token_value = (*header.value())["duplicate_token"];
+    if (duplicate_token_value.isString() && !duplicate_token_value.asString().empty()) {
+        duplicate_token = duplicate_token_value.asString();
+    }
+    const Json::Value& duplicate_number_value = (*header.value())["duplicate_session_number"];
+    if (duplicate_number_value.isInt64()) {
+        duplicate_session_number = duplicate_number_value.asInt64();
+    }
+
     auto initial_seats = ReadRequiredArray(record, "initial_seats");
     if (!initial_seats.ok()) {
         return initial_seats.status();
@@ -396,6 +407,8 @@ util::StatusOr<RoundEntry> ProjectRoundRecord(const Json::Value& record) {
 
     RoundEntry round_entry;
     round_entry.round_key = RoundKey{session_identifier.value(), round_number.value()};
+    round_entry.duplicate_token = duplicate_token;
+    round_entry.duplicate_session_number = duplicate_session_number;
     round_entry.players = players.value();
     round_entry.turn = turn.value();
     round_entry.timestamp_ms = time_ms.value();

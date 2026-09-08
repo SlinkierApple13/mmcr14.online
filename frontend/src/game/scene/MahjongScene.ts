@@ -168,11 +168,18 @@ export class MahjongScene {
   private autoActionTimeout: ReturnType<typeof setTimeout> | null = null
   private predrawSortTimeout: ReturnType<typeof setTimeout> | null = null
   private pendingButton: Container | null = null
+  private pendingSeatButtons: Container | null = null
   private deferredSnapshot: ActiveSessionSnapshot | null = null
   private deferredPending: {
     seats: { seat_index: number; ready: boolean; username: string | null }[]
     ownReady: boolean
     onToggleReady: () => void
+    duplicate: {
+      members: { player_id: number; username: string; seat_index: number }[]
+      ownPlayerId: number | null
+      ownSeat: number | null
+      onChooseSeat: (seatIndex: number) => void
+    } | null
   } | null = null
   private lastPongMs: number | null = null
   private missedPongCount = 0
@@ -329,7 +336,7 @@ export class MahjongScene {
     } else if (this.deferredPending) {
       const pending = this.deferredPending
       this.deferredPending = null
-      this.showPending(pending.seats, pending.ownReady, pending.onToggleReady)
+      this.showPending(pending.seats, pending.ownReady, pending.onToggleReady, pending.duplicate)
     }
 
     // Right-click: discard drawn tile, or pass/final-pass
@@ -432,6 +439,8 @@ export class MahjongScene {
   private clearPendingButton(): void {
     this.pendingButton?.destroy({ children: true })
     this.pendingButton = null
+    this.pendingSeatButtons?.destroy({ children: true })
+    this.pendingSeatButtons = null
   }
 
   private clearLatencyPingTimeouts(): void {
@@ -1759,10 +1768,16 @@ export class MahjongScene {
     seats: { seat_index: number; ready: boolean; username: string | null }[],
     ownReady: boolean,
     onToggleReady: () => void,
+    duplicate: {
+      members: { player_id: number; username: string; seat_index: number }[]
+      ownPlayerId: number | null
+      ownSeat: number | null
+      onChooseSeat: (seatIndex: number) => void
+    } | null = null,
   ): void {
     if (!this.mounted) {
       this.deferredSnapshot = null
-      this.deferredPending = { seats, ownReady, onToggleReady }
+      this.deferredPending = { seats, ownReady, onToggleReady, duplicate }
       return
     }
 
@@ -1789,18 +1804,113 @@ export class MahjongScene {
     this.stateDisplay.clear()
     this.tempDisplay.clear()
     this.tempDisplay.visible = true
-    const entries = seats
-      .map((s) => ({ username: typeof s.username === 'string' ? s.username.trim() : '', ready: s.ready }))
-      .filter((s) => s.username.length > 0)
-      .map((s) => ({ label: s.username, color: s.ready ? 0x000000 : 0x888888 }))
-    if (entries.length === 0) {
-      this.tempDisplay.addText('pending', '等待玩家加入', 0, 0, 0, 240, false, 0x000000, true)
+    if (duplicate) {
+      const winds = ['東', '南', '西', '北']
+      const entries = duplicate.members
+        .map((member) => ({
+          username: member.username.trim(),
+          seat_index: member.seat_index,
+        }))
+        .filter((member) => member.username.length > 0)
+        .map((member) => {
+          const seat = member.seat_index >= 0
+            ? seats.find((s) => s.seat_index === member.seat_index)
+            : undefined
+          const ready = Boolean(seat?.ready)
+          return {
+            label: member.seat_index >= 0
+              ? `[${winds[member.seat_index] ?? '?'}] ${member.username}`
+              : member.username,
+            color: ready ? 0x000000 : 0x888888,
+          }
+        })
+      if (entries.length === 0) {
+        this.tempDisplay.addText('pending', '等待玩家加入', 0, 0, 0, 240, false, 0x000000, true)
+      } else {
+        this.tempDisplay.displayQueue(entries)
+      }
     } else {
-      this.tempDisplay.displayQueue(entries)
+      const entries = seats
+        .map((s) => ({ username: typeof s.username === 'string' ? s.username.trim() : '', ready: s.ready }))
+        .filter((s) => s.username.length > 0)
+        .map((s) => ({ label: s.username, color: s.ready ? 0x000000 : 0x888888 }))
+      if (entries.length === 0) {
+        this.tempDisplay.addText('pending', '等待玩家加入', 0, 0, 0, 240, false, 0x000000, true)
+      } else {
+        this.tempDisplay.displayQueue(entries)
+      }
     }
 
     // Prepare/unprepare button at the MeldChoices position
     this.addPendingButton(ownReady, onToggleReady)
+
+    // Duplicate mode: four seat-choice buttons to the left of the ready button.
+    if (duplicate) {
+      this.addPendingSeatButtons(duplicate)
+    }
+  }
+
+  /** Rounded-square seat buttons (東/南/西/北) for duplicate pending rooms. */
+  private addPendingSeatButtons(duplicate: {
+    members: { player_id: number; username: string; seat_index: number }[]
+    ownPlayerId: number | null
+    ownSeat: number | null
+    onChooseSeat: (seatIndex: number) => void
+  }): void {
+    this.pendingSeatButtons?.destroy({ children: true })
+    this.pendingSeatButtons = null
+
+    const holder = new Container()
+    holder.scale.set(MELD_OPT_SCALE)
+    holder.y = 6 * TILE_HEIGHT
+
+    const labels = ['東', '南', '西', '北']
+    const size = TILE_WIDTH
+    const gap = TILE_WIDTH * 0.3
+    // Keep the same gap between the last seat button and the ready button.
+    const readyLeft = 5 * TILE_HEIGHT - TILE_WIDTH * 1.35
+    const startX = readyLeft - TILE_WIDTH * 6
+
+    labels.forEach((label, seatIndex) => {
+      const occupiedByOther = duplicate.members.some(
+        (member) => member.seat_index === seatIndex && member.player_id !== duplicate.ownPlayerId,
+      )
+      if (occupiedByOther) {
+        return
+      }
+      const chosen = duplicate.ownSeat === seatIndex
+
+      const btn = new Container()
+      btn.x = startX + seatIndex * (size + gap)
+      btn.alpha = chosen ? 1 : 0.6
+
+      const bg = new Graphics()
+      bg.roundRect(-size / 2, -size / 2, size, size, TILE_RADIUS)
+      bg.fill({ color: FRONT_COLOR })
+      bg.stroke({ color: BORDER_COLOR, width: LINE_WIDTH })
+      btn.addChild(bg)
+
+      const text = new Text({
+        text: label,
+        style: { fontFamily: 'CmuSerif, GameFangsong, sans-serif', fontSize: 190, fill: 0x000000, align: 'center' },
+      })
+      text.anchor.set(0.5)
+      btn.addChild(text)
+
+      btn.eventMode = 'static'
+      btn.cursor = 'pointer'
+      btn.on('pointerover', () => { bg.tint = 0xe0e0e0 })
+      btn.on('pointerout', () => { bg.tint = 0xffffff })
+      btn.on('pointerdown', (e: FederatedPointerEvent) => {
+        if (e.button !== 0) return
+        duplicate.onChooseSeat(seatIndex)
+      })
+
+      holder.addChild(btn)
+    })
+
+    this.center.addChild(holder)
+    this.pendingSeatButtons = holder
   }
 
   private addPendingButton(ready: boolean, onToggle: () => void): void {
@@ -1812,7 +1922,7 @@ export class MahjongScene {
     btn.scale.set(MELD_OPT_SCALE)
 
     const bg = new Graphics()
-    bg.roundRect(-TILE_WIDTH * 1.2, -TILE_WIDTH / 2, TILE_WIDTH * 2.4, TILE_WIDTH, TILE_RADIUS)
+    bg.roundRect(-TILE_WIDTH * 1.35, -TILE_WIDTH / 2, TILE_WIDTH * 2.7, TILE_WIDTH, TILE_RADIUS)
     bg.fill({ color: ready ? 0xf0c5b8 : 0xefdf9f })
     bg.stroke({ color: BORDER_COLOR, width: LINE_WIDTH })
     btn.addChild(bg)

@@ -1,0 +1,1 @@
+ALTER TABLE duplicate_seed_lists ADD COLUMN started_session_count INTEGER NOT NULL DEFAULT 0;

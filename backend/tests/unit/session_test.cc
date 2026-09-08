@@ -118,6 +118,33 @@ TEST(ActiveSessionTest, RecomputesWaitOptionsDuringInitialDeal) {
 	}
 }
 
+TEST(ActiveSessionTest, DuplicateModeStartsAndDealsFromDuplicateWall) {
+	GameConfig config;
+	config.duplicate_mode = true;
+	config.duplicate_token = "abcdef0123456789abcdef0123456789";
+	config.unranked = true;
+	config.recorded = true;
+	config.round_count = 1;
+	config.duplicate_session_number = 0;
+	for (std::uint64_t index = 1; index <= 16; ++index) {
+		config.duplicate_seeds.push_back(0x11111111ULL * index);
+	}
+
+	// The constructor enqueues kStart (it crashed here before the wall fix).
+	SessionHarness harness(nullptr, config);
+	ASSERT_TRUE(harness.session.state_.next_transition.has_value());
+	EXPECT_EQ(harness.session.state_.next_transition->kind, EventKind::kStart);
+
+	StepToFirstDiscard(harness);
+	EXPECT_EQ(harness.session.state_.round_counter, 1u);
+	// 13 * 4 tiles dealt + 1 drawn from the wall.
+	EXPECT_EQ(harness.session.wall_size(), 136u - 53u);
+	EXPECT_EQ(harness.session.seats_[0].hand_tiles.size(), 13u);
+	EXPECT_EQ(harness.session.seats_[1].hand_tiles.size(), 13u);
+	EXPECT_EQ(harness.session.seats_[2].hand_tiles.size(), 13u);
+	EXPECT_EQ(harness.session.seats_[3].hand_tiles.size(), 13u);
+}
+
 TEST(ActiveSessionTest, SpectatorSnapshotNeverContainsConcealedTilesOrActions) {
 	SessionHarness harness;
 	StepToFirstDiscard(harness);

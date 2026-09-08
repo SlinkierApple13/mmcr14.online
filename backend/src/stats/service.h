@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -56,6 +57,8 @@ struct RoundEntry {
     std::int64_t turn{0};
     std::int64_t timestamp_ms{0};
     double fan{0.0};
+    std::string duplicate_token;
+    std::int64_t duplicate_session_number{-1};
     std::vector<qingque::fan_code> fan_results;
     std::vector<int> fan_ids;
     std::optional<game::HandWrapper> winning_hand;
@@ -169,7 +172,9 @@ struct StatsFilter {
     std::vector<mahjong::win_t> win_type_filter_negative;
     std::optional<bool> self_drawn;
     bool exclude_superior_fans{true};
-    bool nonstandard_only{false};
+    // Session-mode filter: -1 = all, 0 = ranked (default), 1 = unranked,
+    // 2 = duplicate.
+    int mode_filter{0};
     std::int64_t time_start{0};
     std::int64_t time_end{std::numeric_limits<std::int64_t>::max()};
     double min_fan{0.0};
@@ -187,6 +192,10 @@ class StatsService {
 public:
     explicit StatsService(storage::Database* database);
 
+    // While set, round entries of duplicate sessions whose token is still
+    // active are hidden from queries until the token is destroyed.
+    void SetDuplicateActivityCheck(std::function<bool(std::string_view)> callback);
+
     [[nodiscard]] auto InitializeSchema(const std::filesystem::path& migrations_dir) -> util::Status;
     [[nodiscard]] auto LoadFromDatabase() -> util::Status;
     [[nodiscard]] auto UpsertRoundRecord(const Json::Value& record) -> util::Status;
@@ -198,6 +207,8 @@ public:
                                   std::string_view sort_order = "desc",
                                   std::size_t offset = 0,
                                   std::size_t limit = 50) const -> util::StatusOr<RoundPage>;
+
+    [[nodiscard]] auto entry_visible_locked(const RoundEntry& entry) const -> bool;
     [[nodiscard]] auto ListAllRounds() const -> std::vector<const RoundEntry*>;
     [[nodiscard]] auto ListPlayers() const -> std::vector<RoundPlayer>;
     [[nodiscard]] auto round_count() const -> std::size_t;
@@ -214,6 +225,7 @@ private:
     std::unordered_map<RoundKey, RoundEntry, RoundKeyHash> rounds_;
     std::vector<const RoundEntry*> rounds_by_time_desc_;
     std::unordered_map<std::int64_t, RoundPlayer> players_;
+    std::function<bool(std::string_view)> duplicate_activity_check_;
     std::uint64_t version_{0};
 };
 

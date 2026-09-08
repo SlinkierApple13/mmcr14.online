@@ -401,8 +401,16 @@ bool StatsFilter::matches(const RoundEntry& entry) const {
     if (player_id.has_value() && !entry.has_player(*player_id)) {
         return false;
     }
-    const bool is_nonstandard = IsNonstandardSession(entry.round_key.session_identifier);
-    if (nonstandard_only != is_nonstandard) {
+    const bool is_duplicate = !entry.duplicate_token.empty();
+    const bool is_unranked =
+        !is_duplicate && IsNonstandardSession(entry.round_key.session_identifier);
+    if (mode_filter == 2 && !is_duplicate) {
+        return false;
+    }
+    if (mode_filter == 1 && !is_unranked) {
+        return false;
+    }
+    if (mode_filter == 0 && (is_unranked || is_duplicate)) {
         return false;
     }
     if (entry.timestamp_ms < time_start || entry.timestamp_ms > time_end) {

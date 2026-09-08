@@ -260,5 +260,42 @@ TEST(GameHubTest, SessionIdsAreRandomizedWithinConfiguredRange) {
     }
 }
 
+TEST(GameHubTest, DuplicatePendingSeatSelectionMovesAndUnchooses) {
+    GameConfig config;
+    config.duplicate_mode = true;
+    QueueConfig queue_config;
+
+    PendingSession session(nullptr, 42, config, queue_config);
+
+    auto alpha = std::make_shared<auth::PlayerProfile>(MakePlayer(101, "Alpha"));
+    auto beta = std::make_shared<auth::PlayerProfile>(MakePlayer(102, "Beta"));
+    ASSERT_TRUE(session.join_player(auth::PlayerProfilePtr(alpha)).ok());
+    ASSERT_TRUE(session.join_player(auth::PlayerProfilePtr(beta)).ok());
+
+    EXPECT_FALSE(session.is_member(999));
+
+    // Readiness requires a chosen seat.
+    EXPECT_FALSE(session.player_ready(101, true).ok());
+
+    ASSERT_TRUE(session.choose_seat(101, 0).ok());
+    EXPECT_EQ(session.chosen_seat_of(101), 0);
+    EXPECT_TRUE(session.player_ready(101, true).ok());
+
+    // Moving to another free seat transfers the player directly.
+    ASSERT_TRUE(session.choose_seat(101, 2).ok());
+    EXPECT_EQ(session.chosen_seat_of(101), 2);
+    EXPECT_FALSE(session.seats()[0].player.valid());
+    EXPECT_TRUE(session.seats()[2].player.matches(101));
+    EXPECT_FALSE(session.seats()[2].ready);
+
+    // Seats occupied by another member are rejected.
+    EXPECT_FALSE(session.choose_seat(102, 2).ok());
+
+    // Clicking the chosen seat unchoses it.
+    ASSERT_TRUE(session.choose_seat(101, 2).ok());
+    EXPECT_FALSE(session.chosen_seat_of(101).has_value());
+    EXPECT_FALSE(session.player_ready(101, true).ok());
+}
+
 }  // namespace
 }  // namespace mmcr::game

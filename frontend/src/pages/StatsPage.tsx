@@ -52,6 +52,7 @@ interface StatsPlayer {
 
 interface RoundEntryRecordRaw {
   game_folder: string
+  display_folder?: string
   game_index: number
   drawn_game: boolean
   winner: number
@@ -174,7 +175,7 @@ export default function StatsPage() {
   const [filterForm] = Form.useForm()
   const watchedPlayerName: string[] | undefined = Form.useWatch('playerName', filterForm)
   const watchedExcludeSuperior = Form.useWatch('exclude_superior_fans', filterForm)
-  const watchedNonstandardOnly = Form.useWatch('nonstandard_only', filterForm)
+  const watchedMode: number = Form.useWatch('mode', filterForm) ?? 0
   const playerHasSelection = Array.isArray(watchedPlayerName) && watchedPlayerName.length >= 1
 
   useEffect(() => {
@@ -260,7 +261,7 @@ export default function StatsPage() {
         filter.time_end = (values.timeRange[1] as dayjs.Dayjs).endOf('day').valueOf()
       }
       filter.exclude_superior_fans = values.exclude_superior_fans !== undefined ? values.exclude_superior_fans : false
-      filter.nonstandard_only = values.nonstandard_only !== undefined ? values.nonstandard_only : false
+      filter.mode = values.mode !== undefined ? values.mode : 0
 
       setCurrentPage(nextPage)
       setPageSize(nextPageSize)
@@ -489,7 +490,7 @@ export default function StatsPage() {
     (entries: RoundEntryRecordRaw[]) =>
       entries.map((entry, index) => ({
         key: index,
-        tableId: extractTableId(entry.game_folder),
+        tableId: extractTableId(entry.display_folder ?? entry.game_folder),
         roundId: getRoundDisplay(entry.game_index),
         replayFolder: entry.game_folder,
         roundIndex: entry.game_index,
@@ -642,9 +643,16 @@ export default function StatsPage() {
                       <Text>排除上位番种</Text>
                     </Space>
                     <Space>
-                      <Switch checked={!!watchedNonstandardOnly}
-                        onChange={(checked) => filterForm.setFieldsValue({ nonstandard_only: checked })} />
-                      <Text>休闲模式</Text>
+                      <Select
+                        style={{ width: 110 }}
+                        value={watchedMode}
+                        onChange={(value) => filterForm.setFieldsValue({ mode: value })}
+                        options={[
+                          { value: 0, label: '段位模式' },
+                          { value: 1, label: '休闲模式' },
+                          { value: 2, label: '复式' },
+                        ]}
+                      />
                     </Space>
                     <Space>
                       <Switch checked={showPlayerStats && playerHasSelection}
@@ -664,7 +672,7 @@ export default function StatsPage() {
                   </Space>
                 </Form.Item>
                 <Form.Item name="exclude_superior_fans" hidden initialValue={false}><Switch /></Form.Item>
-                <Form.Item name="nonstandard_only" hidden initialValue={false}><Switch /></Form.Item>
+                <Form.Item name="mode" hidden initialValue={0}><Switch /></Form.Item>
               </Col>
               <Col xs={16} sm={10} md={7}>
                 <Form.Item label=" ">

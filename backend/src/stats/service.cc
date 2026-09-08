@@ -74,6 +74,21 @@ void SortStatsRounds(std::vector<const RoundEntry*>& rounds,
 StatsService::StatsService(storage::Database* database)
     : database_(database) {}
 
+void StatsService::SetDuplicateActivityCheck(std::function<bool(std::string_view)> callback) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    duplicate_activity_check_ = std::move(callback);
+}
+
+bool StatsService::entry_visible_locked(const RoundEntry& entry) const {
+    if (entry.duplicate_token.empty()) {
+        return true;
+    }
+    if (!duplicate_activity_check_) {
+        return true;
+    }
+    return !duplicate_activity_check_(entry.duplicate_token);
+}
+
 util::Status StatsService::InitializeSchema(const std::filesystem::path& migrations_dir) {
     if (database_ == nullptr || !database_->is_open()) {
         return util::Status::Internal("database is not open");
@@ -94,7 +109,7 @@ util::Status StatsService::LoadFromDatabase() {
     auto statement = database_->Prepare(
         "SELECT session_identifier, round_number, drawn_game, winner_seat, from_seat, win_type_bits, "
         "win_tile, turn, time_ms, fan_text, meld_count_json, players_json, fan_results_json, "
-        "winning_hand_json FROM stats_round_entries;");
+        "winning_hand_json, duplicate_token, duplicate_session_number FROM stats_round_entries;");
     if (!statement.ok()) {
         return statement.status();
     }
@@ -153,6 +168,9 @@ util::Status StatsService::LoadFromDatabase() {
             return winning_hand.status();
         }
         entry.winning_hand = std::move(winning_hand.value());
+
+        entry.duplicate_token = statement.value().ColumnText(14);
+        entry.duplicate_session_number = statement.value().ColumnInt64(15);
 
         rounds_[entry.round_key] = std::move(entry);
     }
@@ -239,6 +257,9 @@ util::StatusOr<RoundCollection> StatsService::Query(const StatsFilter& filter) c
     const auto end = TimeRangeEnd(begin, rounds_by_time_desc_.end(), filter.time_start);
     for (auto it = begin; it != end; ++it) {
         const auto* entry = *it;
+        if (!entry_visible_locked(*entry)) {
+            continue;
+        }
         if (filter.matches(*entry)) {
             collection.add_round(entry);
         }
@@ -259,6 +280,9 @@ util::StatusOr<RoundPage> StatsService::ListRounds(const StatsFilter& filter,
     rounds.reserve(static_cast<std::size_t>(std::distance(range_begin, range_end)));
     for (auto it = range_begin; it != range_end; ++it) {
         const auto* entry = *it;
+        if (!entry_visible_locked(*entry)) {
+            continue;
+        }
         if (filter.matches(*entry)) {
             rounds.push_back(entry);
         }
@@ -345,8 +369,8 @@ util::Status StatsService::persist_round_locked(const RoundEntry& entry) {
         "INSERT OR REPLACE INTO stats_round_entries("
         "session_identifier, round_number, drawn_game, winner_seat, from_seat, win_type_bits, "
         "win_tile, turn, time_ms, fan_text, meld_count_json, players_json, fan_results_json, "
-        "winning_hand_json) "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);");
+        "winning_hand_json, duplicate_token, duplicate_session_number) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16);");
     if (!statement.ok()) {
         return statement.status();
     }
@@ -412,6 +436,18 @@ util::Status StatsService::persist_round_locked(const RoundEntry& entry) {
     } else {
         status = stmt.BindText(14, winning_hand_json);
     }
+    if (!status.ok()) {
+        return status;
+    }
+    if (entry.duplicate_token.empty()) {
+        status = stmt.BindNull(15);
+    } else {
+        status = stmt.BindText(15, entry.duplicate_token);
+    }
+    if (!status.ok()) {
+        return status;
+    }
+    status = stmt.BindInt64(16, entry.duplicate_session_number);
     if (!status.ok()) {
         return status;
     }

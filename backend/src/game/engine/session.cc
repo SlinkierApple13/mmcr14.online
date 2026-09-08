@@ -148,7 +148,46 @@ ActiveSession::ActiveSession(random::SeedContainer* seed_container,
     for (std::size_t i = 0; i < 4; ++i) {
         seats_[i].player = players[i];
     }
+    // The wall variant must hold the right alternative before any access;
+    // kStart prepares it immediately afterwards.
+    if (config_.duplicate_mode) {
+        wall_.emplace<DuplicateWall>();
+    } else {
+        wall_.emplace<Wall>();
+    }
     init();
+}
+
+// ---------------------------------------------------------------------------
+// Wall access (dispatches to Wall or DuplicateWall based on config)
+// ---------------------------------------------------------------------------
+
+auto ActiveSession::wall_empty() const -> bool {
+    return std::visit([](const auto& wall) { return wall.empty(); }, wall_);
+}
+
+auto ActiveSession::wall_size() const -> std::size_t {
+    return std::visit([](const auto& wall) { return wall.size(); }, wall_);
+}
+
+auto ActiveSession::wall_draw(int seat, int count)
+    -> util::StatusOr<std::vector<mahjong::tile_t>> {
+    if (config_.duplicate_mode) {
+        return std::get<DuplicateWall>(wall_).draw(seat, count);
+    }
+    return std::get<Wall>(wall_).draw(count);
+}
+
+auto ActiveSession::wall_draw_tile(int seat, bool from_back)
+    -> util::StatusOr<mahjong::tile_t> {
+    if (config_.duplicate_mode) {
+        // Even where the normal wall would draw from the back, duplicate
+        // mode always draws from the seat's front stack.
+        return std::get<DuplicateWall>(wall_).draw_front(seat);
+    }
+    return from_back
+        ? std::get<Wall>(wall_).draw_back()
+        : std::get<Wall>(wall_).draw_front();
 }
 
 util::Status ActiveSession::handle_message(std::int64_t player_id, const Json::Value& message) {
@@ -430,6 +469,10 @@ void ActiveSession::end_session(std::int64_t timestamp_ms, bool enqueue_record) 
         }
         session_end_callback_(identity_.id, player_ids, lifecycle_.final_scores,
             static_cast<int>(state_.round_counter));
+    }
+
+    if (duplicate_session_end_callback_) {
+        duplicate_session_end_callback_(identity_.id);
     }
 
     // Re-fetch final ratings for record storage
@@ -1113,7 +1156,7 @@ void ActiveSession::execute_transition() {
                 // check for special conditions
                 // heavenly hand is omitted here because concealed hand must be satisfied
                 bool from_replacement = transition.draw_from_back.value_or(false);
-                bool last_tile = wall_.empty();
+                bool last_tile = wall_empty();
                 if (from_replacement || last_tile) {
                     s.avail_melds_self.self_drawn_win = s.wait_options.contains(ti);
                 }
@@ -1165,7 +1208,7 @@ void ActiveSession::execute_transition() {
                 } else {
                     // check for special conditions
                     // earthly hand is omitted here because winning hand must be satisfied
-                    bool last_tile = wall_.empty();
+                    bool last_tile = wall_empty();
                     if (last_tile && s.wait_options.contains(ti)) {
                         s.avail_melds_other |= MeldOpFilter::kDiscardWin;
                     }
@@ -1197,7 +1240,7 @@ void ActiveSession::execute_transition() {
     };
 
     // if should draw but wall empty, mark as drawn game instead
-    if (transition.kind == EventKind::kDrawTile && wall_.empty()) {
+    if (transition.kind == EventKind::kDrawTile && wall_empty()) {
         const int original_actor = transition.actor_seat;
         const auto ts = transition.timestamp_ms;
         const auto sc = transition.stage_counter;
@@ -1283,14 +1326,29 @@ void ActiveSession::execute_transition() {
                 s.auxiliary_ms = config_.auxiliary_timer_ms;
                 s.pending_from_ms = 0;
             }
-            // 1. shuffle seat if needed; otherwise rotate
-            if (config_.seat_shuffle_period > 0 && state_.round_counter % config_.seat_shuffle_period == 0) {
+            // 1. shuffle seat if needed; otherwise rotate. Duplicate mode keeps
+            // the player-chosen seats for the first round and uses seeds from
+            // the shared seed list (0th, 1st, ...) for later shuffles.
+            const bool shuffle_round =
+                config_.seat_shuffle_period > 0 &&
+                state_.round_counter % config_.seat_shuffle_period == 0;
+            if (config_.duplicate_mode && state_.round_counter == 0) {
+                snapshot.seat_shuffle_seed = std::nullopt;
+            } else if (shuffle_round) {
                 // 1a. sort players by player id to ensure deterministic shuffling
                 std::sort(seats_.begin(), seats_.end(), [](const Seat& a, const Seat& b) {
                     return a.player.lock()->player_id < b.player.lock()->player_id;
                 });
-                // 1b. shuffle using a seed from the seed container
-                auto seed = seed_container_->Extract();
+                // 1b. shuffle using a seed from the seed container (or list)
+                std::uint64_t seed = 0;
+                if (config_.duplicate_mode) {
+                    const auto seed_index = duplicate_shuffle_counter_++;
+                    seed = seed_index < config_.duplicate_seeds.size()
+                        ? config_.duplicate_seeds[seed_index]
+                        : seed_container_->Extract();
+                } else {
+                    seed = seed_container_->Extract();
+                }
                 std::shuffle(seats_.begin(), seats_.end(), std::mt19937_64(seed));
                 snapshot.seat_shuffle_seed = seed;
             } else {
@@ -1307,14 +1365,33 @@ void ActiveSession::execute_transition() {
                     snapshot.player_ids[i] = -1;
                 }
             }
-            // 3. prepare the wall using seeds from the seed container
-            // shuffle 16 times to cover all possible wall states,
-            // making seed cracking mid-game impossible
-            for (int i = 0; i < 16; ++i) {
-                auto seed = seed_container_->Extract();
-                snapshot.wall_seeds.push_back(seed);
+            // 3. prepare the wall
+            if (config_.duplicate_mode) {
+                // Round R (starting from 0) uses seeds R*16 .. R*16+15 from the
+                // shared seed list bound to the creation token.
+                const auto round_index = static_cast<std::size_t>(
+                    state_.round_counter > 0 ? state_.round_counter - 1 : 0);
+                const auto begin = round_index * 16;
+                if (begin + 16 <= config_.duplicate_seeds.size()) {
+                    snapshot.wall_seeds.assign(
+                        config_.duplicate_seeds.begin() + static_cast<std::ptrdiff_t>(begin),
+                        config_.duplicate_seeds.begin() + static_cast<std::ptrdiff_t>(begin + 16));
+                } else {
+                    for (int i = 0; i < 16; ++i) {
+                        snapshot.wall_seeds.push_back(seed_container_->Extract());
+                    }
+                }
+                wall_.emplace<DuplicateWall>().prepare(
+                    snapshot.wall_seeds, std::vector<mahjong::tile_t>{});
+            } else {
+                // shuffle 16 times to cover all possible wall states,
+                // making seed cracking mid-game impossible
+                for (int i = 0; i < 16; ++i) {
+                    auto seed = seed_container_->Extract();
+                    snapshot.wall_seeds.push_back(seed);
+                }
+                wall_.emplace<Wall>().prepare(snapshot.wall_seeds, config_.debug_mode ? DebugInitialTiles(seed_container_) : std::vector<mahjong::tile_t>{});
             }
-            wall_.prepare(snapshot.wall_seeds, config_.debug_mode ? DebugInitialTiles(seed_container_) : std::vector<mahjong::tile_t>{});
             // 4. set next transition
             state_.next_transition = Event{
                 .kind = EventKind::kPredraw,
@@ -1330,8 +1407,8 @@ void ActiveSession::execute_transition() {
             // 1. draw tiles
             auto stage = transition.ui64_value.value_or(0);
             int tile_count = (stage >= 12) ? 1 : 4;
-            auto tiles = wall_.draw(tile_count).value();
             int actor_seat = transition.actor_seat;
+            auto tiles = wall_draw(actor_seat, tile_count).value();
             seats_[actor_seat].hand_tiles.insert(seats_[actor_seat].hand_tiles.end(), tiles.begin(), tiles.end());
             // 2. set next transition
             if (stage < 15) {
@@ -1360,7 +1437,7 @@ void ActiveSession::execute_transition() {
             // 1. draw tile
             int actor_seat = transition.actor_seat;
             bool from_back = transition.draw_from_back.value_or(false);
-            auto ti = (from_back ? wall_.draw_back() : wall_.draw_front()).value();
+            auto ti = wall_draw_tile(actor_seat, from_back).value();
             seats_[actor_seat].drawn_tile = ti;
             // 2. set next transition
             state_.next_transition = Event{
@@ -1601,7 +1678,7 @@ void ActiveSession::execute_transition() {
             // get the tile last discarded
             mahjong::tile_t ti = transition_queue_.back().tile.value();
             transition.result_source_actor = transition_queue_.back().actor_seat;
-            bool last_tile = wall_.empty();
+            bool last_tile = wall_empty();
             bool earthly_hand = [this]() {
                 std::size_t tcount = transition_queue_.size();
                 return transition_queue_[tcount - 3].kind == EventKind::kPredraw;
@@ -1645,7 +1722,7 @@ void ActiveSession::execute_transition() {
             // get the tile last discarded
             mahjong::tile_t ti = transition_queue_.back().tile.value();
             transition.result_source_actor = transition_queue_.back().actor_seat;
-            bool last_tile = wall_.empty();
+            bool last_tile = wall_empty();
             // construct mahjong::hand object
             std::vector<mahjong::meld> melds;
             for (const auto& wrapper : seats_[transition.actor_seat].melds) {
@@ -1680,7 +1757,7 @@ void ActiveSession::execute_transition() {
         
         case EventKind::kSelfDrawnWin: {
             // construct mahjong::hand object
-            bool last_tile = wall_.empty();
+            bool last_tile = wall_empty();
             bool heavenly_hand = [this]() {
                 std::size_t tcount = transition_queue_.size();
                 return transition_queue_[tcount - 2].kind == EventKind::kPredraw;

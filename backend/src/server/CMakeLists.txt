@@ -15,6 +15,7 @@ target_link_libraries(mmcr_server PUBLIC
 target_link_libraries(mmcr_server PRIVATE
     Drogon::Drogon
     mmcr::auth
+    mmcr::duplicate
     mmcr::game
     mmcr::random
     mmcr::ranking

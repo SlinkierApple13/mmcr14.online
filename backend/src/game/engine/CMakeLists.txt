@@ -4,6 +4,7 @@ add_library(mmcr_game_engine STATIC
     session_messages.cc
     timer.cc
     wall.cc
+    duplicate_wall.cc
     ${PROJECT_SOURCE_DIR}/external/qingque/rules/patterns.cpp
     ${PROJECT_SOURCE_DIR}/external/qingque/rules/verifiers.cpp
     ${PROJECT_SOURCE_DIR}/external/qingque/rules/criteria.cpp
