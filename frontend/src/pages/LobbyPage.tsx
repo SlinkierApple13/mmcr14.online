@@ -12,6 +12,7 @@ import {
   InputNumber,
   Layout,
   Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -22,6 +23,7 @@ import {
 } from 'antd'
 import type { TableProps } from 'antd'
 import {
+  AppstoreOutlined,
   BookOutlined,
   DownloadOutlined,
   FileTextOutlined,
@@ -70,12 +72,34 @@ interface CreateQueueValues {
   auxiliary_timer_seconds: number
   total_rounds: number
   forced_end_floor: number | null
+  mode: string
+  knockout_score: number
   recorded: boolean
   singleplayer: boolean
   debug_mode: boolean
   unranked: boolean
   public_session: boolean
 }
+
+interface ModeOption {
+  id: string
+  name: string
+  description: string
+  unrankedOnly: boolean
+  showKnockout: boolean
+}
+
+// Built-in play modes. Keep in sync with backend/src/game/mode/mode_registry.cc.
+const MODE_OPTIONS: ModeOption[] = [
+  { id: 'standard', name: '标准', description: '常规四人麻将', unrankedOnly: false, showKnockout: false },
+  {
+    id: 'pass_five_gates',
+    name: '过五关',
+    description: '两队竞速完成五个目标',
+    unrankedOnly: true,
+    showKnockout: true,
+  },
+]
 
 interface AuthFormValues {
   username: string
@@ -139,12 +163,16 @@ function CreateQueueModal({
   open,
   loading,
   form,
+  mode,
+  onModeChange,
   onCancel,
   onSubmit,
 }: {
   open: boolean
   loading: boolean
   form: ReturnType<typeof Form.useForm<CreateQueueValues>>[0]
+  mode: string
+  onModeChange: (mode: string) => void
   onCancel: () => void
   onSubmit: (values: CreateQueueValues) => void
 }) {
@@ -158,10 +186,10 @@ function CreateQueueModal({
     if (singleplayer || debugMode) {
       form.setFieldValue('recorded', false)
     }
-    if (!recorded || singleplayer || debugMode) {
+    if (!recorded || singleplayer || debugMode || mode !== 'standard') {
       form.setFieldValue('unranked', true)
     }
-  }, [form, singleplayer, debugMode, recorded])
+  }, [form, singleplayer, debugMode, recorded, mode])
 
   const validateWholeSecondsInRange = useCallback(
     (value: number | null | undefined, min: number, max: number, label: string): Promise<void> => {
@@ -203,6 +231,8 @@ function CreateQueueModal({
           auxiliary_timer_seconds: 12,
           total_rounds: 16,
           forced_end_floor: null,
+          mode: 'standard',
+          knockout_score: 0,
           recorded: true,
           singleplayer: false,
           debug_mode: false,
@@ -210,6 +240,33 @@ function CreateQueueModal({
           public_session: true,
         }}
       >
+        <Form.Item label="玩法模式" name="mode">
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            onChange={(event) => onModeChange(event.target.value)}
+          >
+            {MODE_OPTIONS.map((option) => (
+              <Radio.Button key={option.id} value={option.id}>
+                {option.name}
+              </Radio.Button>
+            ))}
+          </Radio.Group>
+        </Form.Item>
+        {mode !== 'standard' && (
+          <div style={{ marginBottom: 16, color: 'rgba(0,0,0,0.55)' }}>
+            {MODE_OPTIONS.find((option) => option.id === mode)?.description}
+          </div>
+        )}
+        {mode === 'pass_five_gates' && (
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="淘汰分线 (过五关, 0=关闭)" name="knockout_score">
+                <InputNumber min={0} step={100} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+        )}
         <Row gutter={16}>
           <Col span={12}>
             <Form.Item
@@ -306,19 +363,21 @@ function CreateQueueModal({
           </Col>
         </Row>
         <Row gutter={16}>
-          <Col span={12}>
-            <Form.Item label="击飞" name="forced_end_floor">
-              <Select
-                style={{ width: 90 }}
-                options={[
-                  { value: null, label: '无' },
-                  { value: -1500, label: '-1500 点' },
-                  { value: -2000, label: '-2000 点' },
-                ]}
-              />
-            </Form.Item>
-          </Col>
-          <Col span={12}>
+          {mode !== 'pass_five_gates' && (
+            <Col span={12}>
+              <Form.Item label="击飞" name="forced_end_floor">
+                <Select
+                  style={{ width: 90 }}
+                  options={[
+                    { value: null, label: '无' },
+                    { value: -1500, label: '-1500 点' },
+                    { value: -2000, label: '-2000 点' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+          )}
+          <Col span={mode === 'pass_five_gates' ? 24 : 12}>
             <Form.Item label="等待时公开" name="public_session" valuePropName="checked">
               <Switch />
             </Form.Item>
@@ -362,6 +421,8 @@ function LobbyPage() {
   const [isRegister, setIsRegister] = useState(false)
   const [isLoginModalVisible, setIsLoginModalVisible] = useState(false)
   const [isCreateQueueModalVisible, setIsCreateQueueModalVisible] = useState(false)
+  const [createMode, setCreateMode] = useState<string>('standard')
+  const [modeSelectModalVisible, setModeSelectModalVisible] = useState(false)
   const [queues, setQueues] = useState<LobbySessionRow[]>([])
   const [games, setGames] = useState<ActiveSessionSummary[]>([])
   const wsRef = useRef<WebSocket | null>(null)
@@ -618,6 +679,23 @@ function LobbyPage() {
     void fetchLobby(null)
   }
 
+  const openCreateQueueForMode = (mode: string) => {
+    if (!token) {
+      setIsLoginModalVisible(true)
+      return
+    }
+    setCreateMode(mode)
+    createQueueForm.setFieldsValue({ mode })
+    if (mode !== 'standard') {
+      // Village rules are only allowed in unranked rooms.
+      createQueueForm.setFieldsValue({ unranked: true })
+    }
+    if (mode === 'pass_five_gates') {
+      createQueueForm.setFieldsValue({ knockout_score: 0 })
+    }
+    setIsCreateQueueModalVisible(true)
+  }
+
   const handleCreateQueue = async (values: CreateQueueValues) => {
     if (!token) {
       setIsLoginModalVisible(true)
@@ -635,11 +713,21 @@ function LobbyPage() {
             secondary_timer_ms: values.secondary_timer_seconds * 1000,
             auxiliary_timer_ms: values.auxiliary_timer_seconds * 1000,
             round_count: values.total_rounds,
-            forced_end_floor: values.forced_end_floor ?? null,
+            // 过五关 has its own 淘汰分线 (knockout_score); 击飞 is disabled there.
+            forced_end_floor: values.mode === 'pass_five_gates' ? null : (values.forced_end_floor ?? null),
             recorded: values.singleplayer || values.debug_mode ? false : values.recorded,
             debug_mode: values.debug_mode,
             unranked: values.unranked,
             public_session: values.public_session,
+            ...(values.mode !== 'standard'
+              ? {
+                  mode: values.mode,
+                  mode_config:
+                    values.mode === 'pass_five_gates'
+                      ? { knockout_score: values.knockout_score ?? 0 }
+                      : {},
+                }
+              : {}),
           },
           queue_config: {
             singleplayer: values.singleplayer,
@@ -893,6 +981,20 @@ function LobbyPage() {
             <Button type="link" onClick={() => navigate('/stats')} style={{ color: 'black', fontSize: '16px', padding: '4px 8px' }}>
               统计数据
             </Button>
+            <Button
+              type="link"
+              icon={<AppstoreOutlined />}
+              onClick={() => {
+                if (!loggedIn) {
+                  setIsLoginModalVisible(true)
+                  return
+                }
+                setModeSelectModalVisible(true)
+              }}
+              style={{ color: '#1890ff', fontSize: '16px', padding: '4px 8px' }}
+            >
+              改规
+            </Button>
             <Text style={{ color: 'black', fontSize: '16px' }}>{auth ? auth.player.username : '未登录'}</Text>
             <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
               <Avatar icon={<UserOutlined />} style={{ cursor: 'pointer' }} />
@@ -980,13 +1082,7 @@ function LobbyPage() {
                     <Button
                       type="primary"
                       size="small"
-                      onClick={() => {
-                        if (!loggedIn) {
-                          setIsLoginModalVisible(true)
-                          return
-                        }
-                        setIsCreateQueueModalVisible(true)
-                      }}
+                      onClick={() => openCreateQueueForMode('standard')}
                       icon={<PlusCircleOutlined />}
                     >
                       创建牌桌
@@ -1097,6 +1193,8 @@ function LobbyPage() {
         open={isCreateQueueModalVisible}
         loading={loading}
         form={createQueueForm}
+        mode={createMode}
+        onModeChange={setCreateMode}
         onCancel={() => {
           createQueueForm.resetFields()
           setIsCreateQueueModalVisible(false)
@@ -1105,6 +1203,42 @@ function LobbyPage() {
           void handleCreateQueue(values)
         }}
       />
+
+      <Modal
+        title="改规 · 选择玩法"
+        open={modeSelectModalVisible}
+        onCancel={() => setModeSelectModalVisible(false)}
+        footer={null}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+          {MODE_OPTIONS.map((option) => (
+            <Card
+              key={option.id}
+              size="small"
+              hoverable
+              onClick={() => {
+                setModeSelectModalVisible(false)
+                openCreateQueueForMode(option.id)
+              }}
+              style={{ borderColor: 'rgba(0,0,0,0.1)' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Space>
+                  <Text strong>{option.name}</Text>
+                  {option.unrankedOnly && (
+                    <Text type="secondary" style={{ fontSize: '12px' }}>
+                      休闲
+                    </Text>
+                  )}
+                </Space>
+                <Text type="secondary" style={{ fontSize: '13px' }}>
+                  {option.description}
+                </Text>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </Modal>
 
       <Footer
         style={{
