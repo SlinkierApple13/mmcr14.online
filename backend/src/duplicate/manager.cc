@@ -103,7 +103,7 @@ struct Row {
         return step.status();
     }
     if (step.value() != storage::Statement::StepResult::kRow) {
-        return util::Status::NotFound("seed list not found");
+        return util::Status::NotFound("未找到对应的复式牌墙");
     }
     row = Row{
         .id = statement.ColumnInt64(0),
@@ -211,7 +211,7 @@ util::StatusOr<SeedListCreateResult> DuplicateManager::CreateSeedList(
     std::int64_t expiry_hours,
     std::int64_t now_ms) {
     if (round_count < kMinRoundCount || round_count > kMaxRoundCount) {
-        return util::Status::InvalidArgument("round count must be between 1 and 32");
+        return util::Status::InvalidArgument("小局数必须在 1 到 32 之间");
     }
     if (!AllowedExpiryHours(expiry_hours)) {
         return util::Status::InvalidArgument("expiry hours must be one of 3, 6, 12, 24, 72, 168");
@@ -295,7 +295,7 @@ util::StatusOr<SeedListInfo> DuplicateManager::StartSession(
         return status;
     }
     if (row.expires_at_ms <= now_ms) {
-        return util::Status::InvalidArgument("the duplicate token has expired");
+        return util::Status::InvalidArgument("该牌墙已过期");
     }
 
     const auto next_number = row.next_session_number;
@@ -439,7 +439,7 @@ util::Status DuplicateManager::ExtendExpiry(std::string_view master_token,
         return status;
     }
     if (row.expires_at_ms <= now_ms) {
-        return util::Status::InvalidArgument("the seed list has already expired");
+        return util::Status::InvalidArgument("该牌墙已过期");
     }
 
     auto update = database_->Prepare(
@@ -487,7 +487,7 @@ util::Status DuplicateManager::ForceExpire(std::string_view master_token,
         return status;
     }
     if (row.expires_at_ms <= now_ms) {
-        return util::Status::InvalidArgument("the seed list has already expired");
+        return util::Status::InvalidArgument("该牌墙已过期");
     }
 
     if (row.live_session_count <= 0) {

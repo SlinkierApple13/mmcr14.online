@@ -299,7 +299,7 @@ TEST(ActiveSessionTest, RejectsWrongSeatAndStaleDiscardMessages) {
 		stale_message);
 	EXPECT_FALSE(stale.ok());
 	EXPECT_EQ(stale.code(), util::StatusCode::kInvalidArgument);
-	EXPECT_EQ(stale.message(), "event is outdated");
+  EXPECT_EQ(stale.message(), "操作已过期");
 }
 
 TEST(ActiveSessionTest, SnapshotReportsRemainingDecisionTimer) {

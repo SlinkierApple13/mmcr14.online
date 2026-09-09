@@ -625,6 +625,7 @@ auto ActiveSession::build_snapshot_for_player(
     payload["spectator"] = spectator;
     payload["abandon_game"] = config_.abandon_game;
     payload["duplicate_mode"] = config_.duplicate_mode;
+    payload["unranked"] = config_.unranked;
 
     Json::Value state_payload(Json::objectValue);
     state_payload["round_counter"] = Json::UInt64(state_.round_counter);

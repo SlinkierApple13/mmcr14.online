@@ -64,6 +64,7 @@ Json::Value SerializeRecordGameConfig(const GameConfig& config) {
     payload["debug_mode"] = config.debug_mode;
     payload["public_session"] = config.public_session;
     payload["duplicate_mode"] = config.duplicate_mode;
+    payload["unranked"] = config.unranked;
     return payload;
 }
 

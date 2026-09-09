@@ -105,7 +105,7 @@ auto PendingSession::join_player(auth::PlayerProfilePtr player) -> util::Status 
                 empty_timeout_elapsed_ = false;
             } else {
                 if (members_.size() >= seats_.size()) {
-                    return util::Status::InvalidArgument("session is full");
+                    return util::Status::InvalidArgument("房间已满");
                 }
                 members_.push_back(player);
                 empty_timeout_elapsed_ = false;
@@ -128,7 +128,7 @@ auto PendingSession::join_player(auth::PlayerProfilePtr player) -> util::Status 
                     return !seat.player.valid();
                 });
                 if (seat_it == seats_.end()) {
-                    return util::Status::InvalidArgument("session is full");
+                    return util::Status::InvalidArgument("房间已满");
                 }
 
                 seat_it->player = player;
@@ -161,10 +161,10 @@ auto PendingSession::chosen_seat_of(std::int64_t player_id) const -> std::option
 
 auto PendingSession::choose_seat(std::int64_t player_id, int seat_index) -> util::Status {
     if (!game_config_.duplicate_mode) {
-        return util::Status::InvalidArgument("seat selection requires duplicate mode");
+        return util::Status::InvalidArgument("仅复式模式支持选择座位");
     }
     if (seat_index < 0 || seat_index >= static_cast<int>(seats_.size())) {
-        return util::Status::InvalidArgument("invalid seat index");
+        return util::Status::InvalidArgument("无效的座位");
     }
 
     std::unique_lock lock(mutex_);
@@ -172,7 +172,7 @@ auto PendingSession::choose_seat(std::int64_t player_id, int seat_index) -> util
         return member.matches(player_id);
     });
     if (member_it == members_.end()) {
-        return util::Status::NotFound("player is not in the pending session");
+        return util::Status::NotFound("玩家不在等待房间中");
     }
 
     auto& target = seats_[seat_index];
@@ -208,7 +208,7 @@ auto PendingSession::player_leaves(std::int64_t player_id) -> util::Status {
         if (member_it != members_.end()) {
             members_.erase(member_it);
         } else {
-            return util::Status::NotFound("player is not in pending session");
+            return util::Status::NotFound("玩家不在等待房间中");
         }
     }
     for (auto& seat : seats_) {
@@ -224,7 +224,7 @@ auto PendingSession::player_leaves(std::int64_t player_id) -> util::Status {
     if (game_config_.duplicate_mode) {
         return util::Status::Ok();
     }
-    return util::Status::NotFound("player is not in pending session");
+    return util::Status::NotFound("玩家不在等待房间中");
 }
 
 auto PendingSession::player_ready(std::int64_t player_id, bool ready) -> util::Status {
@@ -234,7 +234,7 @@ auto PendingSession::player_ready(std::int64_t player_id, bool ready) -> util::S
             return member.matches(player_id);
         });
         if (member_it == members_.end()) {
-            return util::Status::NotFound("player is not in pending session");
+            return util::Status::NotFound("玩家不在等待房间中");
         }
         if (ready) {
             auto seat_it = std::find_if(seats_.begin(), seats_.end(), [player_id](const PendingSeat& seat) {
@@ -263,7 +263,7 @@ auto PendingSession::player_ready(std::int64_t player_id, bool ready) -> util::S
         return util::Status::Ok();
     }
 
-    return util::Status::NotFound("player is not in pending session");
+    return util::Status::NotFound("玩家不在等待房间中");
 }
 
 void PendingSession::ensure_empty_timer() {

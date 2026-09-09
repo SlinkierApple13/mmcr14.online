@@ -1043,13 +1043,13 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
 
     if (config.duplicate_mode) {
         if (!config.duplicate_token.has_value()) {
-            return util::Status::InvalidArgument("duplicate mode requires duplicate_token");
+            return util::Status::InvalidArgument("复式模式需要建桌密钥");
         }
         if (config.debug_mode) {
-            return util::Status::InvalidArgument("debug mode is not allowed with duplicate mode");
+            return util::Status::InvalidArgument("复式模式不允许调试模式");
         }
         if (config.forced_end_floor.has_value()) {
-            return util::Status::InvalidArgument("forced_end_floor is not allowed with duplicate mode");
+            return util::Status::InvalidArgument("复式模式不允许击飞");
         }
         if (config.abandon_game) {
             return util::Status::InvalidArgument("abandon_game is not allowed with duplicate mode");
@@ -1059,7 +1059,7 @@ util::StatusOr<game::GameConfig> ParseGameConfig(const Json::Value& object) {
         config.unranked = true;
         config.seat_shuffle_period = 4;
     } else if (config.duplicate_token.has_value()) {
-        return util::Status::InvalidArgument("duplicate_token requires duplicate mode");
+        return util::Status::InvalidArgument("建桌密钥仅用于复式模式");
     }
 
     auto bounds_status = ValidateGameConfigBounds(config);

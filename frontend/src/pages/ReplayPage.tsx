@@ -66,6 +66,7 @@ export default function ReplayPage() {
 
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search])
   const sessionIdentifier = searchParams.get('session')?.trim() ?? ''
+  const sessionNumber = Number(sessionIdentifier.split('_')[0])
   const initialRoundNumber = readRound(location.search)
   const initialWatchingSeat = parseWatchingSeat(searchParams.get('perspective') ?? searchParams.get('watching'))
 
@@ -134,9 +135,13 @@ export default function ReplayPage() {
   const replayRatings = (activeRoundRecord as unknown as Record<string, unknown> | null)?.ratings as Array<{ player_id: number; username?: string; mu?: number; tau?: number; sigma?: number; points?: number; level?: number }> | undefined
   const finalReplayRatings = (activeRoundRecord as unknown as Record<string, unknown> | null)?.final_ratings as Array<{ player_id: number; username?: string; mu?: number; tau?: number; sigma?: number; points?: number; level?: number }> | undefined
 
+  const replayGameConfig = activeRoundRecord?.header?.game_config ?? null
+  const isRankedReplay = !(replayGameConfig?.unranked === true) &&
+    !(replayGameConfig?.duplicate_mode === true) && sessionNumber <= 999999
+
   // Show rating result when kEnd is reached in replay
   useEffect(() => {
-    if (!sceneRef.current || !replayRatings || !finalReplayRatings) return
+    if (!sceneRef.current || !replayRatings || !finalReplayRatings || !isRankedReplay) return
     const entry = timeline[currentIndex]
     if (!entry || entry.event?.kind !== 'end') return
 
@@ -158,7 +163,7 @@ export default function ReplayPage() {
       deltaMu,
       deltaPoints,
     )
-  }, [currentIndex, timeline, watchingSeat, replayRatings, finalReplayRatings, activeRoundRecord])
+  }, [currentIndex, timeline, watchingSeat, replayRatings, finalReplayRatings, activeRoundRecord, isRankedReplay])
 
   function stopPlayback() {
     if (playbackTimeoutRef.current !== null) {
@@ -633,7 +638,7 @@ export default function ReplayPage() {
                 ))}
               </div>
             )}
-            {finalReplayRatings && finalReplayRatings.length > 0 && (
+            {isRankedReplay && finalReplayRatings && finalReplayRatings.length > 0 && (
               <div className="replay-section" style={{ marginTop: 8 }}>
                 <h3 style={{ fontSize: '13px', marginBottom: 8 }}>最终评级</h3>
                 {replayRatings && replayRatings.length > 0

@@ -193,22 +193,22 @@ auto ActiveSession::wall_draw_tile(int seat, bool from_back)
 util::Status ActiveSession::handle_message(std::int64_t player_id, const Json::Value& message) {
     const auto seat_index = find_seat_index(player_id);
     if (!seat_index.has_value()) {
-        return util::Status::NotFound("player is not in the active session");
+        return util::Status::NotFound("玩家不在本局游戏中");
     }
 
     const Json::Value* payload = FindPayload(message);
     if (payload == nullptr) {
-        return util::Status::InvalidArgument("payload must be a JSON object");
+        return util::Status::InvalidArgument("消息体必须是 JSON 对象");
     }
 
     const Json::Value& kind_value = (*payload)["kind"];
     if (!kind_value.isString()) {
-        return util::Status::InvalidArgument("payload.kind must be a string");
+        return util::Status::InvalidArgument("消息缺少有效的操作类型");
     }
 
     const auto kind = ParseEventKind(kind_value.asString());
     if (!kind.has_value()) {
-        return util::Status::InvalidArgument("payload.kind is not a supported event kind");
+        return util::Status::InvalidArgument("不支持的操作类型");
     }
 
     Event event;
@@ -221,7 +221,7 @@ util::Status ActiveSession::handle_message(std::int64_t player_id, const Json::V
     event.stage_counter = ReadOptionalUInt64(*payload, "stage_counter").value_or(0);
 
     if (event.stage_counter <= 0) {
-        return util::Status::InvalidArgument("stage_counter is required and must be a positive integer");
+        return util::Status::InvalidArgument("缺少有效的阶段计数");
     }
 
     event.timestamp_ms = now_ms();
@@ -263,7 +263,7 @@ util::Status ActiveSession::handle_message(std::int64_t player_id, const Json::V
 util::Status ActiveSession::player_leaves(std::int64_t player_id) {
     const auto seat_index = find_seat_index(player_id);
     if (!seat_index.has_value()) {
-        return util::Status::NotFound("player is not in the active session");
+        return util::Status::NotFound("玩家不在本局游戏中");
     }
 
     Event event;
@@ -276,7 +276,7 @@ util::Status ActiveSession::player_leaves(std::int64_t player_id) {
 util::Status ActiveSession::player_resumes(std::int64_t player_id) {
     const auto seat_index = find_seat_index(player_id);
     if (!seat_index.has_value()) {
-        return util::Status::NotFound("player is not in the active session");
+        return util::Status::NotFound("玩家不在本局游戏中");
     }
 
     Event event;
@@ -289,15 +289,15 @@ util::Status ActiveSession::player_resumes(std::int64_t player_id) {
 util::Status ActiveSession::set_abandoned(std::int64_t player_id, bool abandon) {
     std::lock_guard lock(state_.mutex);
     if (!config_.abandon_game) {
-        return util::Status::InvalidArgument("abandon_game is disabled for this session");
+        return util::Status::InvalidArgument("本局不允许中途放弃");
     }
     const auto seat_index = find_seat_index(player_id);
     if (!seat_index.has_value()) {
-        return util::Status::NotFound("player is not in the active session");
+        return util::Status::NotFound("玩家不在本局游戏中");
     }
     Seat& seat_state = seats_[*seat_index];
     if (!seat_state.player.valid()) {
-        return util::Status::InvalidArgument("invalid players cannot abandon");
+        return util::Status::InvalidArgument("无效玩家无法放弃游戏");
     }
     if (seat_state.abandoned == abandon) {
         return util::Status::Ok();
@@ -332,7 +332,7 @@ util::StatusOr<Json::Value> ActiveSession::build_snapshot_for_player_id(std::int
     std::lock_guard lock(state_.mutex);
     const auto seat_index = find_seat_index(player_id);
     if (!seat_index.has_value()) {
-        return util::Status::NotFound("player is not in the active session");
+        return util::Status::NotFound("玩家不在本局游戏中");
     }
 
     return build_snapshot_for_player(*seat_index);
@@ -688,21 +688,21 @@ util::Status ActiveSession::handle_event(const Event& event) {
         // 1. check stage counter
         if (event.stage_counter != state_.stage_counter && event.stage_counter != 0) {
             if (event.stage_counter < state_.stage_counter) {
-                return util::Status::InvalidArgument("event is outdated");
+                return util::Status::InvalidArgument("操作已过期");
             } else {
-                return util::Status::InvalidArgument("event is from the future");
+                return util::Status::InvalidArgument("操作尚未就绪");
             }
         }
         
         // 2. check actor seat
         if (event.actor_seat < 0 || event.actor_seat >= 4) {
-            return util::Status::InvalidArgument("invalid actor seat");
+            return util::Status::InvalidArgument("无效的座位");
         }
 
         // 3. reject server-only transition kinds
         if (event.kind == EventKind::kDrawTile || event.kind == EventKind::kPredraw ||
             event.kind == EventKind::kDrawnGame || event.kind == EventKind::kEnd) {
-            return util::Status::InvalidArgument("invalid event kind");
+            return util::Status::InvalidArgument("无效的操作类型");
         } 
 
         // 3. pass kStart, kPlayerLeft, and kPlayerResumed
@@ -715,7 +715,7 @@ util::Status ActiveSession::handle_event(const Event& event) {
 
         // 4. if transition queue is empty, reject
         if (transition_queue_.empty()) {
-            return util::Status::InvalidArgument("no transition history");
+            return util::Status::InvalidArgument("没有可用的对局状态");
         }
 
         // 5. check the event type
@@ -725,26 +725,26 @@ util::Status ActiveSession::handle_event(const Event& event) {
         bool after_added_kong = last_trans.kind == EventKind::kAddedKong && last_trans.actor_seat != event.actor_seat;
 
         if (!after_discard && !after_added_kong && !after_draw && !after_meld) {
-            return util::Status::InvalidArgument("invalid state for event");
+            return util::Status::InvalidArgument("当前状态无法执行该操作");
         }
 
         // 6. after draw or meld, only allow kDiscardTile, kAddedKong, kConcealedKong, kSelfDrawnWin
         if (after_draw || after_meld) {
             if (event.kind != EventKind::kDiscardTile && event.kind != EventKind::kAddedKong &&
                 event.kind != EventKind::kConcealedKong && event.kind != EventKind::kSelfDrawnWin) {
-                return util::Status::InvalidArgument("invalid event kind in current state");
+                return util::Status::InvalidArgument("当前状态无法执行该操作");
             }
             if (update_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
                 update_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
-                return util::Status::InvalidArgument("player does not have a pending decision");
+                return util::Status::InvalidArgument("当前没有待处理的决策");
             }
             // 6a. discard
             if (event.kind == EventKind::kDiscardTile) {
                 if (!event.tile.has_value()) {
-                    return util::Status::InvalidArgument("tile is required for discard event");
+                    return util::Status::InvalidArgument("舍牌操作缺少牌张");
                 }
                 if (!event.use_drawn_tile.has_value()) {
-                    return util::Status::InvalidArgument("use_drawn_tile is required for discard event");
+                    return util::Status::InvalidArgument("舍牌操作缺少来源标记");
                 }
                 // check if the player has the tile to discard
                 const Seat& seat = seats_[event.actor_seat];
@@ -755,16 +755,16 @@ util::Status ActiveSession::handle_event(const Event& event) {
                     has_tile = std::find(seat.hand_tiles.begin(), seat.hand_tiles.end(), event.tile.value()) != seat.hand_tiles.end();
                 }
                 if (!has_tile) {
-                    return util::Status::InvalidArgument("player does not have the tile to discard");
+                    return util::Status::InvalidArgument("你没有这张牌");
                 }
             }
             // 6b. added kong
             if (event.kind == EventKind::kAddedKong) {
                 if (!event.tile.has_value()) {
-                    return util::Status::InvalidArgument("tile is required for added kong event");
+                    return util::Status::InvalidArgument("加杠操作缺少牌张");
                 }
                 if (!event.use_drawn_tile.has_value()) {
-                    return util::Status::InvalidArgument("use_drawn_tile is required for added kong event");
+                    return util::Status::InvalidArgument("加杠操作缺少来源标记");
                 }
                 // check against pre-prepared SelfMeldOptions
                 const Seat& seat = seats_[event.actor_seat];
@@ -776,16 +776,16 @@ util::Status ActiveSession::handle_event(const Event& event) {
                               seat.avail_melds_self.akong_from_hand.end(), 
                               event.tile.value()) != seat.avail_melds_self.akong_from_hand.end() );
                 if (!can_declare) {
-                    return util::Status::InvalidArgument("player cannot declare added kong with the specified tile");
+                    return util::Status::InvalidArgument("无法用这张牌加杠");
                 }
             }
             // 6c. concealed kong
             if (event.kind == EventKind::kConcealedKong) {
                 if (!event.tile.has_value()) {
-                    return util::Status::InvalidArgument("tile is required for concealed kong event");
+                    return util::Status::InvalidArgument("暗杠操作缺少牌张");
                 }
                 if (!event.use_drawn_tile.has_value()) {
-                    return util::Status::InvalidArgument("use_drawn_tile is required for concealed kong event");
+                    return util::Status::InvalidArgument("暗杠操作缺少来源标记");
                 }
                 // check against pre-prepared SelfMeldOptions
                 const Seat& seat = seats_[event.actor_seat];
@@ -797,18 +797,18 @@ util::Status ActiveSession::handle_event(const Event& event) {
                               seat.avail_melds_self.ckong_from_hand.end(), 
                               event.tile.value()) != seat.avail_melds_self.ckong_from_hand.end() );
                 if (!can_declare) {
-                    return util::Status::InvalidArgument("player cannot declare concealed kong with the specified tile");
+                    return util::Status::InvalidArgument("无法用这张牌暗杠");
                 }
             }
             // 6d. self-drawn win
             if (event.kind == EventKind::kSelfDrawnWin) {
                 if (after_meld) {
-                    return util::Status::InvalidArgument("invalid event kind in current state");
+                    return util::Status::InvalidArgument("当前状态无法执行该操作");
                 }
                 // check against pre-prepared SelfMeldOptions
                 const Seat& seat = seats_[event.actor_seat];
                 if (!seat.avail_melds_self.self_drawn_win) {
-                    return util::Status::InvalidArgument("player cannot declare self-drawn win in the current state");
+                    return util::Status::InvalidArgument("当前状态无法和牌");
                 }
             }
         }
@@ -818,41 +818,41 @@ util::Status ActiveSession::handle_event(const Event& event) {
             if (event.kind != EventKind::kChow && event.kind != EventKind::kPung && 
                 event.kind != EventKind::kMeldedKong && event.kind != EventKind::kDiscardWin &&
                 event.kind != EventKind::kPass && event.kind != EventKind::kFinalPass) {
-                return util::Status::InvalidArgument("invalid event kind in current state");
+                return util::Status::InvalidArgument("当前状态无法执行该操作");
             }
             const Seat& seat = seats_[event.actor_seat];
             if (update_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
                 update_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
-                return util::Status::InvalidArgument("player does not have a pending decision");
+                return util::Status::InvalidArgument("当前没有待处理的决策");
             }
             // 7a. chow
             if (event.kind == EventKind::kChow) {
                 if (!event.ui64_value.has_value()) {
-                    return util::Status::InvalidArgument("ui64_value is required for chow event");
+                    return util::Status::InvalidArgument("吃牌操作缺少模式");
                 }
                 if (event.ui64_value.value() < 1 || event.ui64_value.value() > 3) {
-                    return util::Status::InvalidArgument("invalid ui64_value for chow event");
+                    return util::Status::InvalidArgument("无效的吃牌模式");
                 }
                 if ((seat.avail_melds_other & MeldOpFilter::kChows[event.ui64_value.value()]) == 0) {
-                    return util::Status::InvalidArgument("player cannot declare chow with the specified mode");
+                    return util::Status::InvalidArgument("无法以此模式吃牌");
                 }
             }
             // 7b. pung
             if (event.kind == EventKind::kPung) {
                 if ((seat.avail_melds_other & MeldOpFilter::kPung) == 0) {
-                    return util::Status::InvalidArgument("player cannot declare pung in the current state");
+                    return util::Status::InvalidArgument("当前状态无法碰");
                 }
             }
             // 7c. melded kong
             if (event.kind == EventKind::kMeldedKong) {
                 if ((seat.avail_melds_other & MeldOpFilter::kMeldedKong) == 0) {
-                    return util::Status::InvalidArgument("player cannot declare melded kong in the current state");
+                    return util::Status::InvalidArgument("当前状态无法明杠");
                 }
             }
             // 7d. discard win
             if (event.kind == EventKind::kDiscardWin) {
                 if ((seat.avail_melds_other & MeldOpFilter::kDiscardWin) == 0) {
-                    return util::Status::InvalidArgument("player cannot declare discard win in the current state");
+                    return util::Status::InvalidArgument("当前状态无法和牌");
                 }
             }
         }
@@ -861,17 +861,17 @@ util::Status ActiveSession::handle_event(const Event& event) {
         if (after_added_kong) {
             if (event.kind != EventKind::kRobAddedKongWin && 
                 event.kind != EventKind::kPass && event.kind != EventKind::kFinalPass) {
-                return util::Status::InvalidArgument("invalid event kind in current state");
+                return util::Status::InvalidArgument("当前状态无法执行该操作");
             }
             const Seat& seat = seats_[event.actor_seat];
             if (update_pending_status(event.actor_seat, now) == PendingStatus::kPendingNone || 
                 update_pending_status(event.actor_seat, now) == PendingStatus::kPendingSlept) {
-                return util::Status::InvalidArgument("player does not have a pending decision");
+                return util::Status::InvalidArgument("当前没有待处理的决策");
             }
             // 8a. rob added kong win
             if (event.kind == EventKind::kRobAddedKongWin) {
                 if ((seat.avail_melds_other & MeldOpFilter::kRobAddedKongWin) == 0) {
-                    return util::Status::InvalidArgument("player cannot declare rob added kong win in the current state");
+                    return util::Status::InvalidArgument("当前状态无法和牌");
                 }
             }
         }
@@ -1019,7 +1019,7 @@ util::Status ActiveSession::handle_event(const Event& event) {
         } break;
 
         default: {
-            return util::Status::InvalidArgument("unsupported event kind");
+            return util::Status::InvalidArgument("不支持的操作类型");
         }
     }
 

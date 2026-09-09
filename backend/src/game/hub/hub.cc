@@ -132,13 +132,13 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
     std::string duplicate_token;
     if (game_config.duplicate_mode) {
         if (!game_config.duplicate_token.has_value() || game_config.duplicate_token->empty()) {
-            return util::Status::InvalidArgument("duplicate mode requires a duplicate token");
+            return util::Status::InvalidArgument("复式模式需要建桌密钥");
         }
         if (request.queue_config.singleplayer) {
-            return util::Status::InvalidArgument("duplicate mode cannot be singleplayer");
+            return util::Status::InvalidArgument("复式模式不能为单人游戏");
         }
         if (duplicate_manager_ == nullptr) {
-            return util::Status::Internal("duplicate manager is unavailable");
+            return util::Status::Internal("复式牌墙服务不可用");
         }
         const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -150,7 +150,7 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
             // Roll back the allocated session number — this creation is rejected.
             (void)duplicate_manager_->EndSession(started.value().creation_token, now_ms, false);
             return util::Status::InvalidArgument(
-                "round_count must match the seed list round count (" +
+                "小局数必须与牌墙小局数一致 (" +
                 std::to_string(started.value().round_count) + ")");
         }
         game_config.duplicate_token = started.value().creation_token;
@@ -165,7 +165,7 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
         std::unique_lock lock(mutex_);
         if (player_pending_sessions_.contains(request.owner.player_id) ||
             player_active_sessions_.contains(request.owner.player_id)) {
-            return util::Status::InvalidArgument("owner is already in a session");
+            return util::Status::InvalidArgument("你已在一场对局中");
         }
 
         auto owner = UpsertKnownPlayer(known_players_, request.owner);
@@ -276,14 +276,14 @@ util::Status GameHub::connect_player(const ConnectPlayerRequest& request) {
         auto player_active_it = player_active_sessions_.find(request.player.player_id);
         if (player_active_it != player_active_sessions_.end() &&
             player_active_it->second != *request.session_id) {
-            return util::Status::InvalidArgument("player is already in another active session");
+            return util::Status::InvalidArgument("你已在其他对局中");
         }
 
         auto active_it = active_sessions_.find(*request.session_id);
         if (active_it != active_sessions_.end()) {
             // Verify the player is actually a seat holder in this session
             if (!active_it->second->has_player(request.player.player_id)) {
-                return util::Status::NotFound("player is not in this active session");
+                return util::Status::NotFound("你不在该对局中");
             }
             (void)UpsertKnownPlayer(known_players_, request.player);
             player_active_sessions_[request.player.player_id] = *request.session_id;
@@ -292,12 +292,12 @@ util::Status GameHub::connect_player(const ConnectPlayerRequest& request) {
             resume_delay_ms = active_it->second->config().network_delay_ms;
         } else {
             if (player_active_it != player_active_sessions_.end()) {
-                return util::Status::InvalidArgument("player is already in an active session");
+                return util::Status::InvalidArgument("你已在对局中");
             }
 
             auto pending_it = pending_sessions_.find(*request.session_id);
             if (pending_it == pending_sessions_.end()) {
-                return util::Status::NotFound("session not found");
+                return util::Status::NotFound("找不到该牌桌");
             }
 
             target_session = pending_it->second.get();
@@ -405,7 +405,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
 
     const auto message_type = FindMessageType(request.message);
     if (!message_type.has_value()) {
-        return util::Status::InvalidArgument("message type is required");
+        return util::Status::InvalidArgument("消息缺少类型");
     }
 
     if (*message_type == "lobby.list") {
@@ -420,7 +420,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
     if (*message_type == "session.join") {
         const Json::Value* payload = FindPayload(request.message);
         if (payload == nullptr) {
-            return util::Status::InvalidArgument("payload must be a JSON object");
+            return util::Status::InvalidArgument("消息体必须是 JSON 对象");
         }
         auto session_id = ReadRequiredInt64(*payload, "session_id");
         if (!session_id.ok()) {
@@ -429,7 +429,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
 
         const auto player = request.player.lock();
         if (player == nullptr) {
-            return util::Status::NotFound("player profile is no longer available");
+            return util::Status::NotFound("玩家信息已失效");
         }
 
         return connect_player(ConnectPlayerRequest{
@@ -443,7 +443,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
         if (request.message.isObject() && request.message.isMember("payload")) {
             payload = FindPayload(request.message);
             if (payload == nullptr) {
-                return util::Status::InvalidArgument("payload must be a JSON object");
+                return util::Status::InvalidArgument("消息体必须是 JSON 对象");
             }
         }
 
@@ -462,15 +462,15 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
             auto active_it = player_active_sessions_.find(player_id);
             if (active_it != player_active_sessions_.end()) {
                 if (requested_session_id.has_value() && active_it->second != *requested_session_id) {
-                    return util::Status::NotFound("player is not in requested session");
+                    return util::Status::NotFound("你不在该牌桌中");
                 }
-                return util::Status::InvalidArgument("player cannot leave an active session");
+                return util::Status::InvalidArgument("对局进行中无法退出");
             }
 
             auto pending_it = player_pending_sessions_.find(player_id);
             if (pending_it != player_pending_sessions_.end()) {
                 if (requested_session_id.has_value() && pending_it->second != *requested_session_id) {
-                    return util::Status::NotFound("player is not in requested pending session");
+                    return util::Status::NotFound("你不在该等待房间中");
                 }
                 auto session_it = pending_sessions_.find(pending_it->second);
                 if (session_it != pending_sessions_.end()) {
@@ -478,7 +478,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
                 }
                 player_pending_sessions_.erase(pending_it);
             } else if (requested_session_id.has_value()) {
-                return util::Status::NotFound("player is not in requested pending session");
+                return util::Status::NotFound("你不在该等待房间中");
             }
             browsing_players_.insert(player_id);
         }
@@ -497,7 +497,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
     if (*message_type == "queue.ready" || *message_type == "queue.choose_seat") {
         const Json::Value* payload = FindPayload(request.message);
         if (payload == nullptr) {
-            return util::Status::InvalidArgument("payload must be a JSON object");
+            return util::Status::InvalidArgument("消息体必须是 JSON 对象");
         }
 
         auto requested_session_id = ReadOptionalInt64(*payload, "session_id");
@@ -512,7 +512,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
             if (pending_it != player_pending_sessions_.end()) {
                 if (requested_session_id.value().has_value() &&
                     pending_it->second != *requested_session_id.value()) {
-                    return util::Status::NotFound("player is not in requested pending session");
+                    return util::Status::NotFound("你不在该等待房间中");
                 }
                 auto session_it = pending_sessions_.find(pending_it->second);
                 if (session_it != pending_sessions_.end()) {
@@ -521,7 +521,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
             }
         }
         if (pending_session == nullptr) {
-            return util::Status::NotFound("player is not in a pending session");
+            return util::Status::NotFound("你不在等待房间中");
         }
 
         auto status = route_pending_message(request, *pending_session);
@@ -537,11 +537,11 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
         std::shared_lock lock(mutex_);
         auto active_it = player_active_sessions_.find(player_id);
         if (active_it == player_active_sessions_.end()) {
-            return util::Status::NotFound("player is not in an active session");
+            return util::Status::NotFound("你不在对局中");
         }
         auto session_it = active_sessions_.find(active_it->second);
         if (session_it == active_sessions_.end()) {
-            return util::Status::NotFound("active session not found");
+            return util::Status::NotFound("找不到该对局");
         }
         return route_active_message(request, *session_it->second);
     }
@@ -549,7 +549,7 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
     if (*message_type == "game.abandon") {
         const Json::Value* payload = FindPayload(request.message);
         if (payload == nullptr) {
-            return util::Status::InvalidArgument("payload must be a JSON object");
+            return util::Status::InvalidArgument("消息体必须是 JSON 对象");
         }
         auto abandon = ReadRequiredBool(*payload, "abandon");
         if (!abandon.ok()) {
@@ -558,11 +558,11 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
         std::shared_lock lock(mutex_);
         auto active_it = player_active_sessions_.find(player_id);
         if (active_it == player_active_sessions_.end()) {
-            return util::Status::NotFound("player is not in an active session");
+            return util::Status::NotFound("你不在对局中");
         }
         auto session_it = active_sessions_.find(active_it->second);
         if (session_it == active_sessions_.end()) {
-            return util::Status::NotFound("active session not found");
+            return util::Status::NotFound("找不到该对局");
         }
         return session_it->second->set_abandoned(player_id, abandon.value());
     }
@@ -571,16 +571,16 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
         std::shared_lock lock(mutex_);
         auto active_it = player_active_sessions_.find(player_id);
         if (active_it == player_active_sessions_.end()) {
-            return util::Status::NotFound("player is not in an active session");
+            return util::Status::NotFound("你不在对局中");
         }
         auto session_it = active_sessions_.find(active_it->second);
         if (session_it == active_sessions_.end()) {
-            return util::Status::NotFound("active session not found");
+            return util::Status::NotFound("找不到该对局");
         }
         return session_it->second->player_resumes(player_id);
     }
 
-    return util::Status::InvalidArgument("unsupported game message type");
+    return util::Status::InvalidArgument("不支持的游戏消息");
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +606,7 @@ util::StatusOr<const PendingSession*> GameHub::find_pending_session(std::int64_t
     std::shared_lock lock(mutex_);
     auto it = pending_sessions_.find(session_id);
     if (it == pending_sessions_.end()) {
-        return util::Status::NotFound("pending session not found");
+        return util::Status::NotFound("找不到该等待房间");
     }
     return it->second.get();
 }
@@ -615,7 +615,7 @@ util::StatusOr<const ActiveSession*> GameHub::find_active_session(std::int64_t s
     std::shared_lock lock(mutex_);
     auto it = active_sessions_.find(session_id);
     if (it == active_sessions_.end()) {
-        return util::Status::NotFound("active session not found");
+        return util::Status::NotFound("找不到该对局");
     }
     return it->second.get();
 }
@@ -710,12 +710,12 @@ util::Status GameHub::route_pending_message(const RouteGameMessageRequest& reque
                                     PendingSession& session) {
     const auto message_type = FindMessageType(request.message);
     if (!message_type.has_value()) {
-        return util::Status::InvalidArgument("message type is required");
+        return util::Status::InvalidArgument("消息缺少类型");
     }
 
     const Json::Value* payload = FindPayload(request.message);
     if (payload == nullptr) {
-        return util::Status::InvalidArgument("payload must be a JSON object");
+        return util::Status::InvalidArgument("消息体必须是 JSON 对象");
     }
 
     const auto player_id = request.player.player_id();
@@ -735,7 +735,7 @@ util::Status GameHub::route_pending_message(const RouteGameMessageRequest& reque
     }
 
     if (*message_type != "queue.ready") {
-        return util::Status::InvalidArgument("unsupported pending-session message type");
+        return util::Status::InvalidArgument("不支持的等待房间消息");
     }
 
     auto ready = ReadRequiredBool(*payload, "ready");
@@ -770,17 +770,17 @@ util::Status GameHub::start_active_session(std::int64_t session_id) {
     {
         std::unique_lock lock(mutex_);
         if (active_sessions_.contains(session_id)) {
-            return util::Status::InvalidArgument("session is already active");
+            return util::Status::InvalidArgument("对局已经开始");
         }
 
         auto pending_it = pending_sessions_.find(session_id);
         if (pending_it == pending_sessions_.end()) {
-            return util::Status::NotFound("pending session not found");
+            return util::Status::NotFound("找不到该等待房间");
         }
 
         PendingSession* pending_session = pending_it->second.get();
         if (!pending_session->is_full() || !pending_session->all_ready()) {
-            return util::Status::InvalidArgument("pending session is not ready to start");
+            return util::Status::InvalidArgument("等待房间尚未准备好");
         }
 
         game_config = pending_session->game_config();
@@ -788,7 +788,7 @@ util::Status GameHub::start_active_session(std::int64_t session_id) {
         for (std::size_t index = 0; index < players.size(); ++index) {
             players[index] = seats[index].player;
             if (players[index].lock() == nullptr) {
-                return util::Status::InvalidArgument("pending session contains invalid player wrapper");
+                return util::Status::InvalidArgument("等待房间包含无效玩家");
             }
 
             if (players[index].player_id() > 0) {

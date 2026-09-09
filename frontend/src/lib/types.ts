@@ -152,6 +152,7 @@ export interface ActiveSessionSnapshot {
   reveal_all_hands?: boolean
   abandon_game?: boolean
   duplicate_mode?: boolean
+  unranked?: boolean
   hand_access?: {
     granted: boolean
     target_player_id?: number
@@ -240,6 +241,8 @@ export interface ReplayGameConfig {
   round_count: number
   seat_shuffle_period: number
   recorded: boolean
+  unranked?: boolean
+  duplicate_mode?: boolean
 }
 
 export interface ReplayRecordHeader {

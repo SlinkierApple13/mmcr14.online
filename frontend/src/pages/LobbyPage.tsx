@@ -520,7 +520,7 @@ function DuplicateTokenModal({
 
   const withAuth = (action: () => void) => {
     if (!token) {
-      notification.error({ message: '请先登录', placement: 'topRight' })
+      notification.error({ message: '请先登录', placement: 'topRight', duration: 3 })
       return
     }
     action()
@@ -536,12 +536,13 @@ function DuplicateTokenModal({
           body: { round_count: rounds, expiry_hours: expiryHours },
         })
         setCreated(result)
-        notification.success({ message: '牌墙已生成', placement: 'topRight' })
+        notification.success({ message: '牌墙已生成', placement: 'topRight', duration: 3 })
       } catch (error) {
         notification.error({
           message: '生成失败',
           description: describeError(error, '生成牌墙失败'),
           placement: 'topRight',
+          duration: 3,
         })
       } finally {
         setBusy(false)
@@ -565,6 +566,7 @@ function DuplicateTokenModal({
           message: '查询失败',
           description: describeError(error, '查询失败'),
           placement: 'topRight',
+          duration: 3,
         })
       } finally {
         setBusy(false)
@@ -582,12 +584,13 @@ function DuplicateTokenModal({
           body: { master_token: extendToken.trim(), expiry_hours: extendHours },
         })
         setExtendResult(result)
-        notification.success({ message: '已延长有效期', placement: 'topRight' })
+        notification.success({ message: '已延长有效期', placement: 'topRight', duration: 3 })
       } catch (error) {
         notification.error({
           message: '延长失败',
           description: describeError(error, '延长有效期失败'),
           placement: 'topRight',
+          duration: 3,
         })
       } finally {
         setBusy(false)
@@ -597,7 +600,7 @@ function DuplicateTokenModal({
 
   const handleExpireClick = () => {
     if (!token) {
-      notification.error({ message: '请先登录', placement: 'topRight' })
+      notification.error({ message: '请先登录', placement: 'topRight', duration: 3 })
       return
     }
     setConfirmExpire(true)
@@ -614,12 +617,13 @@ function DuplicateTokenModal({
       setConfirmExpire(false)
       setExtendResult(null)
       setQueryResult(null)
-      notification.success({ message: '牌墙已强制过期', placement: 'topRight' })
+      notification.success({ message: '牌墙已强制过期', placement: 'topRight', duration: 3 })
     } catch (error) {
       notification.error({
         message: '操作失败',
         description: describeError(error, '强制过期失败'),
         placement: 'topRight',
+        duration: 3,
       })
     } finally {
       setBusy(false)
@@ -640,7 +644,7 @@ function DuplicateTokenModal({
         <InputNumber min={1} max={32} precision={0} value={rounds} onChange={(value) => setRounds(value ?? 16)} />
         <Text>自动过期时间</Text>
         <Select
-          style={{ width: 120 }}
+          style={{ width: 90 }}
           value={expiryHours}
           onChange={(value) => setExpiryHours(value)}
           options={DUPLICATE_EXPIRY_OPTIONS}
@@ -684,7 +688,7 @@ function DuplicateTokenModal({
         </div>
       )}
 
-      <Divider orientation="left" plain>延长有效期（主控密钥）</Divider>
+      <Divider orientation="left" plain>延长有效期</Divider>
       <Space wrap>
         <Input
           style={{ width: 300 }}
@@ -707,7 +711,7 @@ function DuplicateTokenModal({
         </div>
       )}
 
-      <Divider orientation="left" plain>强制过期（主控密钥）</Divider>
+      <Divider orientation="left" plain>强制过期</Divider>
       <Space wrap>
         <Input
           style={{ width: 300 }}
@@ -795,7 +799,7 @@ function LobbyPage() {
           message: '获取牌桌信息失败',
           description: describeError(error, '无法获取牌桌列表，请重试'),
           placement: 'topRight',
-          duration: 5,
+          duration: 3,
         })
       } finally {
         setFetchingTables(false)
@@ -943,8 +947,9 @@ function LobbyPage() {
         })
         notification.success({
           message: '注册成功',
-          description: '您已成功注册，现在可以登录了。',
+          description: '您已成功注册，现在可以登录了',
           placement: 'topRight',
+          duration: 3,
         })
         setIsRegister(false)
         form.resetFields(['password'])
@@ -961,8 +966,9 @@ function LobbyPage() {
       form.resetFields()
       notification.success({
         message: '登录成功',
-        description: `欢迎回来，${loggedInSession.player.username}！`,
+        description: `欢迎回来，${loggedInSession.player.username}`,
         placement: 'topRight',
+        duration: 3,
       })
       await fetchLobby(loggedInSession.session.token)
     } catch (error) {
@@ -970,7 +976,7 @@ function LobbyPage() {
         message: isRegister ? '注册失败' : '登录失败',
         description: describeError(error, isRegister ? '注册失败，请重试' : '登录失败，请重试'),
         placement: 'topRight',
-        duration: 5,
+        duration: 3,
       })
     } finally {
       setLoading(false)
@@ -987,12 +993,14 @@ function LobbyPage() {
     clearStoredAuth()
     clearStoredSessionId()
     setAuth(null)
+    setRating(null)
     setQueues([])
     setGames([])
     notification.success({
       message: '已退出登录',
-      description: '本地会话已清除。',
+      description: '本地会话已清除',
       placement: 'topRight',
+      duration: 3,
     })
     void fetchLobby(null)
   }
@@ -1041,8 +1049,9 @@ function LobbyPage() {
       createQueueForm.resetFields()
       notification.success({
         message: '创建成功',
-        description: `牌桌 ${sessionId} 已创建。`,
+        description: `牌桌 ${sessionId} 已创建`,
         placement: 'topRight',
+        duration: 3,
       })
       navigate(`/game?gameId=${sessionId}`)
     } catch (error) {
@@ -1050,7 +1059,7 @@ function LobbyPage() {
         message: '创建失败',
         description: describeError(error, '创建牌桌失败，请重试'),
         placement: 'topRight',
-        duration: 5,
+        duration: 3,
       })
     } finally {
       setLoading(false)
@@ -1306,7 +1315,7 @@ function LobbyPage() {
           </div>
         ) : (
           <Row gutter={[24, 24]} style={{ maxWidth: 1200, margin: '0 auto', width: '100%' }}>
-            {rating && (
+            {loggedIn && rating && (
               <Col xs={24} lg={24} xl={24}>
                 <Card title="玩家信息" style={{ borderRadius: '12px', marginBottom: 8, borderColor: 'rgba(0, 0, 0, 0.06)', boxShadow: '0 14px 32px rgba(0, 0, 0, 0.06)' }}>
                   <Space direction="vertical" size={2}>

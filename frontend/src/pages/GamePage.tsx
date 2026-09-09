@@ -132,6 +132,7 @@ export default function GamePage() {
   const spectatorManagementPendingIdsRef = useRef<Set<string>>(new Set())
   const [abandonEnabled, setAbandonEnabled] = useState(false)
   const [duplicateMode, setDuplicateMode] = useState(false)
+  const unrankedRef = useRef(false)
   const [myAbandoned, setMyAbandoned] = useState(false)
   const [abandonConfirmOpen, setAbandonConfirmOpen] = useState(false)
 
@@ -447,6 +448,7 @@ export default function GamePage() {
             lastScRef.current = -1
             setAbandonEnabled(snap.summary.abandon_game !== false)
             setDuplicateMode(snap.summary.duplicate_mode === true)
+            unrankedRef.current = snap.summary.unranked === true
             setMyAbandoned(false)
             // Capture ratings for pending phase sidebar
             const pRatings = (snap as unknown as Record<string, unknown>)?.ratings
@@ -460,6 +462,7 @@ export default function GamePage() {
             lastScRef.current = snap.state.stage_counter
             setAbandonEnabled(snap.abandon_game !== false)
             setDuplicateMode(snap.duplicate_mode === true)
+            unrankedRef.current = snap.unranked === true
             const ownSeat = snap.seats.find(
               (seat) => seat.seat_index === snap.viewer.seat_index,
             )
@@ -611,7 +614,7 @@ export default function GamePage() {
             const rArr = ratingsPayload as Array<{ player_id: number; mu?: number; sigma?: number; points?: number; level?: number }>
             const fArr = finalRatingsPayload as Array<{ player_id: number; mu?: number; sigma?: number; points?: number; level?: number }>
             const myId = auth?.player.player_id
-            if (!isSpectator && myId) {
+            if (!isSpectator && myId && !unrankedRef.current) {
               const initMe = rArr.find(r => r.player_id === myId)
               const finalMe = fArr.find(r => r.player_id === myId)
               if (initMe && finalMe) {
