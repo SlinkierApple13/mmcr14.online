@@ -680,8 +680,11 @@ def main():
                     restored_access = restored_snapshot.get("payload", {}).get("hand_access", {})
                     assert_true(
                         restored_access.get("granted") is True
-                        and restored_access.get("target_player_id") == target_player_id
-                        and restored_access.get("seat_index") == 0,
+                        and any(
+                            grant.get("target_player_id") == target_player_id
+                            and grant.get("seat_index") == 0
+                            for grant in restored_access.get("grants", [])
+                        ),
                         f"spectator grant was not restored: {restored_snapshot}",
                     )
                     restored_hand, _ = spectator_ws.expect_json(
@@ -710,7 +713,10 @@ def main():
                     perspective_access = granted_perspective.get("payload", {}).get("hand_access", {})
                     assert_true(
                         perspective_access.get("granted") is True
-                        and perspective_access.get("target_player_id") == target_player_id,
+                        and any(
+                            grant.get("target_player_id") == target_player_id
+                            for grant in perspective_access.get("grants", [])
+                        ),
                         f"perspective change lost hand grant: {granted_perspective}",
                     )
                     spectator_ws.expect_json(

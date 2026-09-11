@@ -54,24 +54,31 @@ public:
                std::int64_t target_player_id,
                std::string spectator_username) {
         std::lock_guard lock(mutex_);
-        grants_[session_id][spectator_player_id] = SpectatorHandGrant{
+        grants_[session_id][spectator_player_id][target_player_id] = SpectatorHandGrant{
             .target_player_id = target_player_id,
             .spectator_username = std::move(spectator_username),
         };
     }
 
-    [[nodiscard]] std::optional<std::int64_t> FindTarget(
+    [[nodiscard]] std::vector<std::int64_t> FindTargets(
             std::int64_t session_id,
             std::int64_t spectator_player_id) const {
         std::lock_guard lock(mutex_);
+        std::vector<std::int64_t> targets;
         const auto session_it = grants_.find(session_id);
         if (session_it == grants_.end()) {
-            return std::nullopt;
+            return targets;
         }
-        const auto grant_it = session_it->second.find(spectator_player_id);
-        return grant_it == session_it->second.end()
-            ? std::nullopt
-            : std::optional<std::int64_t>(grant_it->second.target_player_id);
+        const auto spectator_it = session_it->second.find(spectator_player_id);
+        if (spectator_it == session_it->second.end()) {
+            return targets;
+        }
+        targets.reserve(spectator_it->second.size());
+        for (const auto& [target_player_id, unused] : spectator_it->second) {
+            (void)unused;
+            targets.push_back(target_player_id);
+        }
+        return targets;
     }
 
     void Remove(std::int64_t session_id, std::int64_t spectator_player_id) {
@@ -86,6 +93,27 @@ public:
         }
     }
 
+    void RemoveTarget(std::int64_t session_id,
+                      std::int64_t spectator_player_id,
+                      std::int64_t target_player_id) {
+        std::lock_guard lock(mutex_);
+        auto session_it = grants_.find(session_id);
+        if (session_it == grants_.end()) {
+            return;
+        }
+        auto spectator_it = session_it->second.find(spectator_player_id);
+        if (spectator_it == session_it->second.end()) {
+            return;
+        }
+        spectator_it->second.erase(target_player_id);
+        if (spectator_it->second.empty()) {
+            session_it->second.erase(spectator_it);
+            if (session_it->second.empty()) {
+                grants_.erase(session_it);
+            }
+        }
+    }
+
     [[nodiscard]] bool Revoke(
             std::int64_t session_id,
             std::int64_t target_player_id,
@@ -95,14 +123,17 @@ public:
         if (session_it == grants_.end()) {
             return false;
         }
-        auto grant_it = session_it->second.find(spectator_player_id);
-        if (grant_it == session_it->second.end() ||
-                grant_it->second.target_player_id != target_player_id) {
+        auto spectator_it = session_it->second.find(spectator_player_id);
+        if (spectator_it == session_it->second.end() ||
+                !spectator_it->second.contains(target_player_id)) {
             return false;
         }
-        session_it->second.erase(grant_it);
-        if (session_it->second.empty()) {
-            grants_.erase(session_it);
+        spectator_it->second.erase(target_player_id);
+        if (spectator_it->second.empty()) {
+            session_it->second.erase(spectator_it);
+            if (session_it->second.empty()) {
+                grants_.erase(session_it);
+            }
         }
         return true;
     }
@@ -116,9 +147,10 @@ public:
         if (session_it == grants_.end()) {
             return result;
         }
-        for (const auto& [spectator_player_id, grant] : session_it->second) {
-            if (grant.target_player_id == target_player_id) {
-                result.emplace_back(spectator_player_id, grant.spectator_username);
+        for (const auto& [spectator_player_id, targets] : session_it->second) {
+            const auto grant_it = targets.find(target_player_id);
+            if (grant_it != targets.end()) {
+                result.emplace_back(spectator_player_id, grant_it->second.spectator_username);
             }
         }
         return result;
@@ -128,7 +160,9 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<
         std::int64_t,
-        std::unordered_map<std::int64_t, SpectatorHandGrant>> grants_;
+        std::unordered_map<
+            std::int64_t,
+            std::unordered_map<std::int64_t, SpectatorHandGrant>>> grants_;
 };
 
 // Minimum interval between two spectator hand requests on one connection.
@@ -635,7 +669,7 @@ public:
                 return;
             }
             if (message_type.has_value() && *message_type == "spectator.hand.refresh") {
-                handleSpectatorHandRefresh(connection, context, request_id);
+                handleSpectatorHandRefresh(connection, context, root, request_id);
                 return;
             }
             state_->SendWebSocketJson(
@@ -768,7 +802,7 @@ public:
             connection->setContext(context);
             state_->socket_hub().AddConnection(connection, session_id, route);
             Json::Value snapshot = active_session.value()->build_snapshot_for_spectator();
-            const auto grant = appendSpectatorHandAccess(
+            const auto grants = appendSpectatorHandAccess(
                 snapshot,
                 session_id,
                 authenticated.value().player.player_id,
@@ -779,8 +813,8 @@ public:
                 0,
                 authenticated.value().player.player_id,
                 route);
-            if (grant.has_value()) {
-                sendApprovedHand(connection, context);
+            for (const auto& grant : grants) {
+                sendApprovedHand(connection, context, {}, grant.target_player_id);
             }
             return;
         }
@@ -1155,28 +1189,33 @@ private:
             [this, request_id] { expireSpectatorHandRequest(request_id); });
     }
 
-    std::optional<ResolvedSpectatorHandGrant> resolveSpectatorHandGrant(
+    std::vector<ResolvedSpectatorHandGrant> resolveSpectatorHandGrants(
             std::int64_t session_id,
             std::int64_t spectator_player_id,
             const game::ActiveSession& active_session) {
-        const auto target_player_id =
-            spectator_hand_grants_.FindTarget(session_id, spectator_player_id);
-        if (!target_player_id.has_value()) {
-            return std::nullopt;
-        }
-
+        const auto targets =
+            spectator_hand_grants_.FindTargets(session_id, spectator_player_id);
+        std::vector<ResolvedSpectatorHandGrant> grants;
+        grants.reserve(targets.size());
         const auto& seats = active_session.seats();
-        for (int seat = 0; seat < static_cast<int>(seats.size()); ++seat) {
-            if (seats[seat].player.matches(*target_player_id)) {
-                return ResolvedSpectatorHandGrant{
-                    .target_player_id = *target_player_id,
-                    .target_seat = seat,
-                };
+        for (const auto target_player_id : targets) {
+            bool resolved = false;
+            for (int seat = 0; seat < static_cast<int>(seats.size()); ++seat) {
+                if (seats[seat].player.matches(target_player_id)) {
+                    grants.push_back(ResolvedSpectatorHandGrant{
+                        .target_player_id = target_player_id,
+                        .target_seat = seat,
+                    });
+                    resolved = true;
+                    break;
+                }
+            }
+            if (!resolved) {
+                spectator_hand_grants_.RemoveTarget(
+                    session_id, spectator_player_id, target_player_id);
             }
         }
-
-        spectator_hand_grants_.Remove(session_id, spectator_player_id);
-        return std::nullopt;
+        return grants;
     }
 
     void grantSpectatorHandAccess(
@@ -1192,30 +1231,35 @@ private:
     }
 
     Json::Value buildSpectatorHandAccessPayload(
-            const std::optional<ResolvedSpectatorHandGrant>& grant) const {
+            const std::vector<ResolvedSpectatorHandGrant>& grants) const {
         Json::Value payload(Json::objectValue);
-        payload["granted"] = grant.has_value();
-        if (grant.has_value()) {
-            payload["target_player_id"] = Json::Int64(grant->target_player_id);
-            payload["seat_index"] = grant->target_seat;
+        payload["granted"] = !grants.empty();
+        Json::Value grant_list(Json::arrayValue);
+        for (const auto& grant : grants) {
+            Json::Value entry(Json::objectValue);
+            entry["target_player_id"] = Json::Int64(grant.target_player_id);
+            entry["seat_index"] = grant.target_seat;
+            grant_list.append(std::move(entry));
         }
+        payload["grants"] = std::move(grant_list);
         return payload;
     }
 
-    std::optional<ResolvedSpectatorHandGrant> appendSpectatorHandAccess(
+    std::vector<ResolvedSpectatorHandGrant> appendSpectatorHandAccess(
             Json::Value& snapshot,
             std::int64_t session_id,
             std::int64_t spectator_player_id,
             const game::ActiveSession& active_session) {
-        auto grant = resolveSpectatorHandGrant(
+        auto grants = resolveSpectatorHandGrants(
             session_id, spectator_player_id, active_session);
-        snapshot["hand_access"] = buildSpectatorHandAccessPayload(grant);
-        return grant;
+        snapshot["hand_access"] = buildSpectatorHandAccessPayload(grants);
+        return grants;
     }
 
     void sendApprovedHand(const drogon::WebSocketConnectionPtr& connection,
                       const std::shared_ptr<GameClientContext>& context,
-                      std::string_view request_id = {}) {
+                      std::string_view request_id = {},
+                      std::optional<std::int64_t> target_player_id = std::nullopt) {
         const auto session_id = context->spectator_session_id();
         if (!session_id.has_value()) {
             sendSpectatorError(
@@ -1232,9 +1276,20 @@ private:
                 request_id);
             return;
         }
-        const auto grant = resolveSpectatorHandGrant(
+        const auto grants = resolveSpectatorHandGrants(
             *session_id, context->player_id(), *active_session.value());
-        if (!grant.has_value()) {
+        const ResolvedSpectatorHandGrant* grant = nullptr;
+        if (target_player_id.has_value()) {
+            for (const auto& candidate : grants) {
+                if (candidate.target_player_id == *target_player_id) {
+                    grant = &candidate;
+                    break;
+                }
+            }
+        } else if (!grants.empty()) {
+            grant = &grants.front();
+        }
+        if (grant == nullptr) {
             sendSpectatorError(
                 connection, "hand_access_not_granted", "尚未获得该玩家的看牌许可", request_id);
             return;
@@ -1359,8 +1414,17 @@ private:
     void handleSpectatorHandRefresh(
         const drogon::WebSocketConnectionPtr& connection,
         const std::shared_ptr<GameClientContext>& context,
+        const Json::Value& root,
         std::string_view request_id) {
-        sendApprovedHand(connection, context, request_id);
+        std::optional<std::int64_t> target_player_id;
+        const Json::Value* payload = FindField(root, {"payload"});
+        if (payload != nullptr && payload->isObject()) {
+            const Json::Value* target_value = FindField(*payload, {"target_player_id"});
+            if (target_value != nullptr && target_value->isInt64()) {
+                target_player_id = target_value->asInt64();
+            }
+        }
+        sendApprovedHand(connection, context, request_id, target_player_id);
     }
 
     void handleSpectatorPerspective(
@@ -1396,7 +1460,7 @@ private:
 
         Json::Value snapshot =
             active_session.value()->build_snapshot_for_spectator(seat_value->asInt());
-        const auto grant = appendSpectatorHandAccess(
+        const auto grants = appendSpectatorHandAccess(
             snapshot, *session_id, context->player_id(), *active_session.value());
         state_->SendWebSocketJson(
             connection,
@@ -1404,8 +1468,8 @@ private:
             0,
             context->player_id(),
             WebSocketRoute::kSpectate);
-        if (grant.has_value()) {
-            sendApprovedHand(connection, context);
+        for (const auto& grant : grants) {
+            sendApprovedHand(connection, context, {}, grant.target_player_id);
         }
     }
 
@@ -1472,7 +1536,8 @@ private:
             const auto spectator_context = spectator->getContext<GameClientContext>();
             if (spectator_context && spectator_context->route() == WebSocketRoute::kSpectate &&
                     spectator_context->spectator_session_id() == hand_request.session_id) {
-                sendApprovedHand(spectator, spectator_context);
+                sendApprovedHand(
+                    spectator, spectator_context, {}, hand_request.target_player_id);
             }
         }
         state_->SendWebSocketJson(connection, MakeWebSocketAck(request_id));

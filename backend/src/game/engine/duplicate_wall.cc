@@ -1,6 +1,3 @@
-// Provisional baseline implementation of DuplicateWall.
-// Semantics mirror Wall::prepare/draw but each seat draws from its own
-// front stack. Replace/extend freely with the intended implementation.
 #include "game/engine/duplicate_wall.h"
 
 #include <algorithm>

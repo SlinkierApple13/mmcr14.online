@@ -157,6 +157,7 @@ export interface ActiveSessionSnapshot {
     granted: boolean
     target_player_id?: number
     seat_index?: number
+    grants?: Array<{ target_player_id: number; seat_index: number }>
   }
 }
 
