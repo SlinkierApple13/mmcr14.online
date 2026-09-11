@@ -1336,9 +1336,12 @@ void ActiveSession::execute_transition() {
                 snapshot.seat_shuffle_seed = std::nullopt;
             } else if (shuffle_round) {
                 // 1a. sort players by player id to ensure deterministic shuffling
-                std::sort(seats_.begin(), seats_.end(), [](const Seat& a, const Seat& b) {
-                    return a.player.lock()->player_id < b.player.lock()->player_id;
-                });
+                //     this must be skipped in duplicate mode
+                if (!config_.duplicate_mode) {
+                    std::sort(seats_.begin(), seats_.end(), [](const Seat& a, const Seat& b) {
+                        return a.player.lock()->player_id < b.player.lock()->player_id;
+                    });
+                }
                 // 1b. shuffle using a seed from the seed container (or list)
                 std::uint64_t seed = 0;
                 if (config_.duplicate_mode) {
