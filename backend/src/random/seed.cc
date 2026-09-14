@@ -7,10 +7,24 @@ namespace mmcr::random {
 
 namespace {
 
+auto RandomDeviceBits() -> std::uint64_t {
+    static std::random_device device;
+    static std::mutex mutex;
+    std::unique_lock<std::mutex> lock(mutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return 0;
+    }
+    const std::uint64_t high = device();
+    const std::uint64_t low = device();
+    return (high << 32) ^ low;
+}
+
 auto NewEntropy() noexcept -> std::uint64_t {
-    // std::random_device is completely garbage
-    std::uint64_t value;
-    value = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::uint64_t value = 0;
+    try {
+        value = RandomDeviceBits();
+    } catch (...) {}
+    value ^= std::chrono::steady_clock::now().time_since_epoch().count();
     value ^= std::chrono::system_clock::now().time_since_epoch().count();
     value ^= reinterpret_cast<std::uint64_t>(std::addressof(value));
     return value;

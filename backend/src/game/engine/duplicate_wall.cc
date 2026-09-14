@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <random>
 
+#include "random/shuffle.h"
 #include "util/status.h"
 
 namespace mmcr::game {
@@ -19,13 +20,13 @@ void DuplicateWall::prepare(std::vector<uint64_t> seeds,
         seeds.push_back(0);
     }
     std::mt19937_64 aux_rng(seeds[0]);
-    std::shuffle(init_tiles.begin(), init_tiles.end(), aux_rng);
+    mmcr::random::shuffle(init_tiles.begin(), init_tiles.end(), aux_rng);
     for (std::size_t i = 0; i < 136; ++i) {
         tiles_[i] = init_tiles[i % init_tiles.size()];
     }
     for (const auto& seed : seeds) {
         std::mt19937_64 rng(seed);
-        std::shuffle(tiles_.begin(), tiles_.end(), rng);
+        mmcr::random::shuffle(tiles_.begin(), tiles_.end(), rng);
     }
     front_stack_indices_ = {0, 51, 34, 17};
     size_ = 136;

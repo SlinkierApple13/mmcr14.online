@@ -1,9 +1,14 @@
+#include <array>
 #include <cstdint>
+#include <numeric>
 #include <random>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "random/seed.h"
+#include "random/shuffle.h"
+#include "random/uniform_int_distribution.h"
 #include "util/status.h"
 
 TEST(StatusTest, FormatsNonOkStatus) {
@@ -53,4 +58,75 @@ TEST(RandomTest, DrawHexConsumesValuesFromSeedContainer) {
     ASSERT_TRUE(hex.ok()) << hex.status().DebugString();
     EXPECT_EQ(hex.value().size(), 16U);
     EXPECT_EQ(container.size(), 0U);
+}
+
+// The following golden values pin the libstdc++ behaviour that wall rebuilds
+// rely on.  Changing them means old records no longer replay as recorded.
+
+TEST(RandomTest, UniformIntDistributionMatchesRecordedDice) {
+    std::mt19937_64 engine(42);
+    mmcr::random::uniform_int_distribution<int> distribution(1, 6);
+
+    const std::array<int, 12> expected{5, 4, 5, 1, 6, 1, 4, 3, 2, 3, 1, 4};
+    for (const int value : expected) {
+        EXPECT_EQ(value, distribution(engine));
+    }
+}
+
+TEST(RandomTest, ShuffleMatchesRecordedPermutation) {
+    std::vector<int> values(16);
+    std::iota(values.begin(), values.end(), 0);
+
+    std::mt19937_64 engine(0xabcdef1234567890ULL);
+    mmcr::random::shuffle(values.begin(), values.end(), engine);
+
+    const std::vector<int> expected{4, 8, 0, 13, 7, 12, 15, 6,
+                                    1, 10, 2, 3, 11, 5, 9, 14};
+    EXPECT_EQ(values, expected);
+}
+
+TEST(RandomTest, SeatShuffleMatchesRecordedPermutation) {
+    std::array<int, 4> seats{0, 1, 2, 3};
+    std::mt19937_64 engine(1);
+    mmcr::random::shuffle(seats.begin(), seats.end(), engine);
+
+    EXPECT_EQ(seats, (std::array<int, 4>{2, 3, 1, 0}));
+}
+
+TEST(RandomTest, WallRebuildSequenceIsStable) {
+    // Mirrors Wall::prepare: one shuffle with the first seed, then one
+    // shuffle over the 136 tile slots per seed, then the dice roll.
+    std::vector<std::uint64_t> seeds;
+    for (int i = 0; i < 16; ++i) {
+        seeds.push_back(0x123456789abcdef0ULL +
+                        static_cast<std::uint64_t>(i) * 0x9e3779b97f4a7c15ULL);
+    }
+
+    std::vector<int> tiles(136);
+    std::iota(tiles.begin(), tiles.end(), 0);
+    std::mt19937_64 aux_rng(seeds[0]);
+    mmcr::random::shuffle(tiles.begin(), tiles.end(), aux_rng);
+
+    std::array<int, 136> wall{};
+    for (std::size_t i = 0; i < wall.size(); ++i) {
+        wall[i] = tiles[i % tiles.size()];
+    }
+    for (const auto seed : seeds) {
+        std::mt19937_64 rng(seed);
+        mmcr::random::shuffle(wall.begin(), wall.end(), rng);
+    }
+
+    const std::array<int, 8> expected_front{45, 2, 13, 115, 50, 87, 62, 31};
+    for (std::size_t i = 0; i < expected_front.size(); ++i) {
+        EXPECT_EQ(expected_front[i], wall[i]);
+    }
+    EXPECT_EQ(wall[135], 91);
+
+    std::array<int, 4> dices{};
+    mmcr::random::uniform_int_distribution<int> distribution(1, 6);
+    for (auto& dice : dices) {
+        dice = distribution(aux_rng);
+    }
+    EXPECT_EQ(dices, (std::array<int, 4>{6, 4, 2, 2}));
+    EXPECT_EQ(((dices[0] + dices[1]) * 52 + (dices[2] + dices[3])) % 68, 48);
 }

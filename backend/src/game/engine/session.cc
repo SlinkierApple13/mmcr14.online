@@ -10,6 +10,8 @@
 
 #include "game/hub/hub.h"
 #include "random/seed.h"
+#include "random/shuffle.h"
+#include "random/uniform_int_distribution.h"
 #include "external/qingque/rules/w_data.h"
 
 namespace mmcr::game {
@@ -1352,7 +1354,7 @@ void ActiveSession::execute_transition() {
                 } else {
                     seed = seed_container_->Extract();
                 }
-                std::shuffle(seats_.begin(), seats_.end(), std::mt19937_64(seed));
+                mmcr::random::shuffle(seats_.begin(), seats_.end(), std::mt19937_64(seed));
                 snapshot.seat_shuffle_seed = seed;
             } else {
                 std::rotate(seats_.rbegin(), seats_.rbegin() + 3, seats_.rend());
@@ -1892,14 +1894,18 @@ void ActiveSession::schedule_pending_start(int seat,
 }
 
 int ActiveSession::get_random_pause() {
-    // Bernoulli distribution with probability GameConfig::random_pause_prob
-    std::bernoulli_distribution apply_random_pause_dist(config_.random_pause_prob);
-    if (!apply_random_pause_dist(random_pause_rng_)) {
+    // Bernoulli draw with probability GameConfig::random_pause_prob, using the
+    // project distributions so the stream does not depend on the standard
+    // library implementation.
+    static constexpr std::uint64_t kProbabilityScale = 1'000'000;
+    const std::uint64_t roll = mmcr::random::uniform_int_distribution<std::uint64_t>(
+        0, kProbabilityScale - 1)(random_pause_rng_);
+    if (roll >= static_cast<std::uint64_t>(
+                    config_.random_pause_prob * static_cast<double>(kProbabilityScale))) {
         return 0;
-    } else {
-        std::uniform_int_distribution<int> random_pause_dist(0, config_.random_pause_range);
-        return random_pause_dist(random_pause_rng_);
     }
+    mmcr::random::uniform_int_distribution<int> random_pause_dist(0, config_.random_pause_range);
+    return random_pause_dist(random_pause_rng_);
 }
 
 /* Protect players' hand information by hiding pauses from other players.

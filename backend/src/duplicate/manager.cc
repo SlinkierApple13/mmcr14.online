@@ -7,6 +7,7 @@
 #include <random>
 #include <sstream>
 
+#include "random/uniform_int_distribution.h"
 #include "storage/database.h"
 #include "storage/migration.h"
 
@@ -48,7 +49,7 @@ constexpr std::int64_t kMsPerHour = 3600 * 1000;
 [[nodiscard]] std::array<std::uint8_t, 16> RandomTokenBytes() {
     std::random_device device;
     std::mt19937_64 engine(device());
-    std::uniform_int_distribution<std::uint64_t> distribution;
+    mmcr::random::uniform_int_distribution<std::uint64_t> distribution;
     std::array<std::uint8_t, 16> bytes{};
     for (std::size_t offset = 0; offset < bytes.size(); offset += 8) {
         const auto value = distribution(engine);
@@ -219,7 +220,7 @@ util::StatusOr<SeedListCreateResult> DuplicateManager::CreateSeedList(
 
     std::random_device device;
     std::mt19937_64 engine(device());
-    std::uniform_int_distribution<std::uint64_t> distribution;
+    mmcr::random::uniform_int_distribution<std::uint64_t> distribution;
     std::vector<std::uint64_t> seeds;
     seeds.reserve(static_cast<std::size_t>(round_count) * kSeedsPerRound);
     for (std::uint32_t index = 0; index < round_count * kSeedsPerRound; ++index) {

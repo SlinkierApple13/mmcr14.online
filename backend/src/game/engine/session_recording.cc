@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "random/seed.h"
+#include "random/uniform_int_distribution.h"
 #include "storage/game_record.h"
 #include "external/qingque/rules/qingque.h"
 #include "external/qingque/rules/w_data.h"
@@ -40,7 +41,7 @@ std::vector<mahjong::tile_t> DebugInitialTiles(random::SeedContainer* seeder) {
     using namespace mahjong::tile_literals;
     using namespace mahjong::honours;
     static std::mt19937_64 rng(seeder->Extract());
-    static std::uniform_int_distribution<int> dist(1, 9);
+    static mmcr::random::uniform_int_distribution<int> dist(1, 9);
     const int roll = dist(rng);
     switch (roll) {
         case 1: return { 1_m, 2_m, 3_m, 4_m, 5_m, 6_m, 7_m, 8_m, 9_m };

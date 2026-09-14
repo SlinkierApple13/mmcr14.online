@@ -7,6 +7,7 @@
 
 #include "duplicate/manager.h"
 #include "game/engine/session.h"
+#include "random/uniform_int_distribution.h"
 
 namespace mmcr::game {
 namespace {
@@ -72,7 +73,7 @@ util::StatusOr<std::int64_t> GameHub::allocate_session_id_locked() {
         return util::Status::Internal("no session ids available in the configured range");
     }
 
-    std::uniform_int_distribution<std::int64_t> distribution(kMinSessionId, kMaxSessionId);
+    mmcr::random::uniform_int_distribution<std::int64_t> distribution(kMinSessionId, kMaxSessionId);
     for (std::int64_t attempts = 0; attempts < kSessionIdCount; ++attempts) {
         const std::int64_t candidate = distribution(session_id_rng_);
         if (pending_sessions_.contains(candidate) || active_sessions_.contains(candidate)) {
@@ -94,7 +95,7 @@ util::StatusOr<std::int64_t> GameHub::allocate_unranked_session_id_locked() {
         return util::Status::Internal("no unranked session ids available");
     }
 
-    std::uniform_int_distribution<std::int64_t> distribution(kMinUnrankedId, kMaxUnrankedId);
+    mmcr::random::uniform_int_distribution<std::int64_t> distribution(kMinUnrankedId, kMaxUnrankedId);
     for (std::int64_t attempts = 0; attempts < kUnrankedIdCount; ++attempts) {
         const std::int64_t candidate = distribution(session_id_rng_);
         if (pending_sessions_.contains(candidate) || active_sessions_.contains(candidate)) {

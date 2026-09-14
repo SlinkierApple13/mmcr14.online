@@ -4,6 +4,8 @@
 #include <cmath>
 #include <random>
 
+#include "random/shuffle.h"
+#include "random/uniform_int_distribution.h"
 #include "util/status.h"
 
 namespace mmcr::game {
@@ -18,16 +20,16 @@ void Wall::prepare(std::vector<uint64_t> seeds,
         seeds.push_back(0);
     }
     std::mt19937_64 aux_rng(seeds[0]);
-    std::shuffle(init_tiles.begin(), init_tiles.end(), aux_rng);
+    mmcr::random::shuffle(init_tiles.begin(), init_tiles.end(), aux_rng);
     for (std::size_t i = 0; i < 136; ++i) {
         tiles_[i] = init_tiles[i % init_tiles.size()];
     }
     for (const auto& seed : seeds) {
         std::mt19937_64 rng(seed);
-        std::shuffle(tiles_.begin(), tiles_.end(), rng);
+        mmcr::random::shuffle(tiles_.begin(), tiles_.end(), rng);
     }
     std::array<int, 4> dices{1, 1, 1, 1};
-    std::uniform_int_distribution<int> dist(1, 6);
+    mmcr::random::uniform_int_distribution<int> dist(1, 6);
     for (auto& dice : dices) {
         dice = dist(aux_rng);
     }
