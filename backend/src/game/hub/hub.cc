@@ -188,6 +188,21 @@ util::StatusOr<CreateGameSessionResult> GameHub::create_session(
                 players[index] = auth::PlayerProfilePtr(handle);
             }
 
+            // Singleplayer bypasses the pending room, so inject the team
+            // assignment here (the owner on 虎, virtual players on 龙) for
+            // team modes such as 过五关.
+            if (game_config.mode == GameMode::kPassFiveGates) {
+                if (!game_config.pass_five_gates.has_value()) {
+                    game_config.pass_five_gates = PassFiveGatesConfig{};
+                }
+                for (std::size_t index = 0; index < players.size(); ++index) {
+                    if (players[index].valid()) {
+                        game_config.pass_five_gates->team[players[index].player_id()] =
+                            (index == 0) ? 0 : 1;
+                    }
+                }
+            }
+
             active_sessions_.emplace(
                 session_id,
                 std::make_unique<ActiveSession>(
@@ -495,7 +510,8 @@ util::Status GameHub::handle_message(const RouteGameMessageRequest& request) {
         return util::Status::Ok();
     }
 
-    if (*message_type == "queue.ready" || *message_type == "queue.choose_seat") {
+    if (*message_type == "queue.ready" || *message_type == "queue.choose_seat" ||
+        *message_type == "queue.team") {
         const Json::Value* payload = FindPayload(request.message);
         if (payload == nullptr) {
             return util::Status::InvalidArgument("消息体必须是 JSON 对象");
@@ -735,6 +751,22 @@ util::Status GameHub::route_pending_message(const RouteGameMessageRequest& reque
         return util::Status::Ok();
     }
 
+    if (*message_type == "queue.team") {
+        auto team = ReadRequiredInt64(*payload, "team");
+        if (!team.ok()) {
+            return team.status();
+        }
+        if (team.value() < 0 || team.value() > 1) {
+            return util::Status::InvalidArgument("team 必须是 0（虎）或 1（龙）");
+        }
+        const auto status = session.player_set_team(player_id, static_cast<int>(team.value()));
+        if (!status.ok()) {
+            return status;
+        }
+        BroadcastPendingSnapshot(*this, session);
+        return util::Status::Ok();
+    }
+
     if (*message_type != "queue.ready") {
         return util::Status::InvalidArgument("不支持的等待房间消息");
     }
@@ -786,6 +818,20 @@ util::Status GameHub::start_active_session(std::int64_t session_id) {
 
         game_config = pending_session->game_config();
         const auto& seats = pending_session->seats();
+        // Inject team assignments (keyed by player id) into the typed
+        // pass-five-gates config. Server-side only; clients can never write
+        // the team map (ParsePassFiveGatesConfig rejects the key).
+        if (game_config.mode == GameMode::kPassFiveGates) {
+            if (!game_config.pass_five_gates.has_value()) {
+                game_config.pass_five_gates = PassFiveGatesConfig{};
+            }
+            for (const auto& seat : seats) {
+                if (!seat.player.valid() || seat.team < 0) {
+                    continue;
+                }
+                game_config.pass_five_gates->team[seat.player.player_id()] = seat.team;
+            }
+        }
         for (std::size_t index = 0; index < players.size(); ++index) {
             players[index] = seats[index].player;
             if (players[index].lock() == nullptr) {

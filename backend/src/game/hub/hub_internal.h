@@ -11,6 +11,7 @@
 
 #include "game/engine/session_internal.h"
 #include "game/hub/hub.h"
+#include "game/mode/mode_registry.h"
 
 namespace mmcr::game {
 

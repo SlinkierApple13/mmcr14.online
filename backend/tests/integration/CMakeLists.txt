@@ -9,3 +9,13 @@ add_test(
         $<TARGET_FILE:mmcr_backend>)
 
 set_tests_properties(mmcr_backend_ws_smoke_test PROPERTIES TIMEOUT 60)
+
+add_test(
+	NAME mmcr_backend_five_gates_smoke_test
+	COMMAND
+		${Python3_EXECUTABLE}
+		${CMAKE_CURRENT_SOURCE_DIR}/five_gates_smoke.py
+		--server-binary
+		$<TARGET_FILE:mmcr_backend>)
+
+set_tests_properties(mmcr_backend_five_gates_smoke_test PROPERTIES TIMEOUT 60)

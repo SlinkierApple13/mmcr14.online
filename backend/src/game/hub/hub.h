@@ -99,6 +99,8 @@ struct ActiveSessionSummary {
     bool public_session{true};
     bool abandon_game{true};
     bool duplicate_mode{false};
+    std::string mode{"standard"};
+    std::string mode_name{"标准"};
     std::vector<std::string> names;
 };
 
