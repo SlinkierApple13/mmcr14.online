@@ -22,6 +22,7 @@ import {
 } from 'antd'
 import type { TableProps } from 'antd'
 import {
+  BarChartOutlined,
   BookOutlined,
   DownloadOutlined,
   FileTextOutlined,
@@ -1276,13 +1277,22 @@ function LobbyPage() {
                     ),
                     icon: <FileTextOutlined />,
                   },
+                  {
+                    key: 'ranking',
+                    label: (
+                      <a href="/ranking.pdf" target="_blank" rel="noopener noreferrer">
+                        段位系统
+                      </a>
+                    ),
+                    icon: <BarChartOutlined />,
+                  },
                 ],
               }}
               placement="bottomRight"
               trigger={['click']}
             >
               <Button type="link" style={{ color: 'black', fontSize: '16px', padding: '4px 8px' }}>
-                查看规则
+                平台文档
               </Button>
             </Dropdown>
             <Button type="link" onClick={() => navigate('/calc')} style={{ color: 'black', fontSize: '16px', padding: '4px 8px' }}>
